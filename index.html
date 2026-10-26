@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beatcut</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Bangers&family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><i data-lucide="audio-waveform"></i> Beatcut</div>
+  <nav class="steps" id="steps">
+    <button data-step="song"><span class="num">1</span> Song</button>
+    <button data-step="clips"><span class="num">2</span> Clips</button>
+    <button data-step="edit"><span class="num">3</span> Edit</button>
+    <button data-step="export"><span class="num">4</span> Export</button>
+  </nav>
+  <div class="top-actions">
+    <button class="icon-btn" id="undoBtn" title="Undo (Ctrl+Z)"><i data-lucide="undo-2"></i></button>
+    <button class="icon-btn" id="redoBtn" title="Redo (Ctrl+Y)"><i data-lucide="redo-2"></i></button>
+  </div>
+</header>
+
+<main class="workspace">
+  <aside class="panel" id="panel">
+    <!-- STEP 1: SONG -->
+    <section class="step" data-panel="song">
+      <h2>Choose a song</h2>
+      <p class="hint">Upload your own audio or pick a royalty-free track. Beats are detected automatically so cuts can snap to them.</p>
+      <div id="songCard"></div>
+      <label class="drop" id="songDrop">
+        <i data-lucide="upload"></i>
+        <span><b>Upload audio</b> — MP3, WAV, M4A, OGG</span>
+        <input type="file" accept="audio/*" id="songFile" hidden>
+      </label>
+      <h3>Royalty-free library</h3>
+      <form class="search" id="musicForm">
+        <i data-lucide="search"></i>
+        <input id="musicQuery" placeholder="Search music: epic, sad piano, drums…" autocomplete="off">
+      </form>
+      <div class="chips" id="musicChips"></div>
+      <div id="musicResults" class="results"></div>
+      <p class="fine">From <a href="https://openverse.org" target="_blank" rel="noopener">Openverse</a> (Freesound + Wikimedia Commons), Creative Commons tracks that allow remixing. No API key needed. Always credit the artist when you post — the credit line is on the Export step.</p>
+      <button class="primary next" data-goto="clips">Next: add clips <i data-lucide="arrow-right"></i></button>
+    </section>
+
+    <!-- STEP 2: CLIPS -->
+    <section class="step" data-panel="clips">
+      <h2>Add video clips</h2>
+      <label class="drop" id="videoDrop">
+        <i data-lucide="film"></i>
+        <span><b>Drop videos here</b> or click to browse</span>
+        <input type="file" accept="video/*" multiple id="videoFile" hidden>
+      </label>
+      <h3>Find a character</h3>
+      <form class="search" id="clipForm">
+        <i data-lucide="search"></i>
+        <input id="clipQuery" placeholder="Character name, e.g. Popeye, Superman…" autocomplete="off">
+      </form>
+      <div class="tabs" id="clipTabs">
+        <button data-src="local" class="on">My clips</button>
+        <button data-src="commons">Wikimedia Commons</button>
+      </div>
+      <div id="clipResults"></div>
+      <button class="primary next" data-goto="edit">Next: edit <i data-lucide="arrow-right"></i></button>
+    </section>
+
+    <!-- STEP 3: EDIT (inspector) -->
+    <section class="step" data-panel="edit">
+      <div id="inspector"></div>
+    </section>
+
+    <!-- STEP 4: EXPORT -->
+    <section class="step" data-panel="export">
+      <h2>Preview &amp; export</h2>
+      <p class="hint">Press play to watch the whole edit, then export an MP4.</p>
+      <div class="field"><label>Quality</label>
+        <div class="seg" id="expRes"><button data-v="0.6667">720p</button><button data-v="1" class="on">1080p</button></div></div>
+      <div class="field"><label>Frame rate</label>
+        <div class="seg" id="expFps"><button data-v="30" class="on">30 fps</button><button data-v="60">60 fps</button></div></div>
+      <div id="expSummary" class="fine"></div>
+      <button class="primary wide" id="exportBtn"><i data-lucide="download"></i> Export MP4</button>
+      <div id="expProgress" class="progress" hidden>
+        <div class="bar"><div id="expBar"></div></div>
+        <div class="row"><span id="expText"></span><button class="ghost small" id="expCancel">Cancel</button></div>
+      </div>
+      <div id="expResult"></div>
+      <h3>Credits</h3>
+      <div id="credits" class="credits"></div>
+    </section>
+  </aside>
+
+  <section class="stage">
+    <div class="stage-bar">
+      <div class="seg" id="aspect">
+        <button data-v="9:16">9:16</button><button data-v="1:1" class="on">1:1</button><button data-v="16:9">16:9</button>
+      </div>
+    </div>
+    <div class="viewer" id="viewer">
+      <canvas id="preview"></canvas>
+      <div class="empty-stage" id="emptyStage">
+        <i data-lucide="clapperboard"></i>
+        <p>Pick a song, add clips, and your edit shows up here.</p>
+      </div>
+    </div>
+    <div class="transport">
+      <button class="icon-btn" id="toStart" title="Back to start (Home)"><i data-lucide="skip-back"></i></button>
+      <button class="play" id="playBtn" title="Play / pause (Space)"><i data-lucide="play"></i></button>
+      <span class="time" id="timeLabel">0:00.0 / 0:00.0</span>
+    </div>
+  </section>
+</main>
+
+<section class="timeline">
+  <div class="tl-tools">
+    <button class="tool" id="splitBtn" title="Split at playhead (S)"><i data-lucide="scissors"></i> Split</button>
+    <button class="tool" id="dupBtn" title="Duplicate (Ctrl+D)"><i data-lucide="copy"></i> Duplicate</button>
+    <button class="tool" id="delBtn" title="Delete (Del)"><i data-lucide="trash-2"></i> Delete</button>
+    <span class="sep"></span>
+    <button class="tool" id="addTextBtn" title="Add text at playhead (T)"><i data-lucide="type"></i> Text</button>
+    <div class="beatsync">
+      <button class="tool" id="syncBtn" title="Retime every clip so each cut lands on a beat"><i data-lucide="wand-sparkles"></i> Beat sync</button>
+      <select id="syncEvery" title="Cut every…"><option value="1">every beat</option><option value="2" selected>every 2 beats</option><option value="4">every 4 beats</option></select>
+    </div>
+    <label class="toggle" title="Snap edges to beats and the playhead"><input type="checkbox" id="snap" checked> <i data-lucide="magnet"></i> Snap</label>
+    <span class="grow"></span>
+    <i data-lucide="zoom-out" class="dim"></i>
+    <input type="range" id="zoom" min="20" max="300" value="80" title="Timeline zoom">
+    <i data-lucide="zoom-in" class="dim"></i>
+  </div>
+  <div class="tl-body">
+    <div class="tl-labels">
+      <div class="lab ruler-lab"></div>
+      <div class="lab"><i data-lucide="film"></i> Video</div>
+      <div class="lab"><i data-lucide="type"></i> Text</div>
+      <div class="lab"><i data-lucide="music"></i> Music</div>
+    </div>
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-content" id="tlContent">
+        <div class="ruler" id="ruler"></div>
+        <div class="track" id="trackV"><div class="track-empty">Drag clips here, or press + on a clip</div></div>
+        <div class="track" id="trackT"></div>
+        <div class="track" id="trackA"></div>
+        <div class="playhead" id="playhead"><div class="knob"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="modal" id="modal" hidden><div class="modal-card" id="modalCard"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.min.js"></script>
+<script src="js/beats.js"></script>
+<script src="js/render.js"></script>
+<script src="js/sources.js"></script>
+<script src="js/export.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
