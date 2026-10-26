@@ -1,7 +1,16 @@
-' Starts a tiny local web server for Beatcut (hidden window) and opens it in your browser.
-' If the server is already running, the second copy just exits and the browser still opens.
+' Starts Beatcut's local helper (hidden) and opens it in your browser.
+' First run: sets up Python packages (yt-dlp finds clips, ffmpeg joins video + audio).
 Set sh = CreateObject("WScript.Shell")
-dir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-sh.Run "python -m http.server 8796 --bind 127.0.0.1 --directory """ & dir & """", 0, False
-WScript.Sleep 1200
+Set fs = CreateObject("Scripting.FileSystemObject")
+dir = fs.GetParentFolderName(WScript.ScriptFullName)
+sh.CurrentDirectory = dir
+If Not fs.FileExists(dir & "\.venv\Scripts\pythonw.exe") Then
+  MsgBox "First start: setting up Beatcut. This takes about a minute.", 64, "Beatcut"
+  sh.Run "cmd /c py -3 -m venv .venv && .venv\Scripts\python -m pip install -q yt-dlp imageio-ffmpeg", 1, True
+End If
+' if it's already running, the second copy just exits and the browser still opens
+sh.Run """" & dir & "\.venv\Scripts\pythonw.exe"" server.py", 0, False
+WScript.Sleep 1500
 sh.Run "http://localhost:8796"
+' keep yt-dlp current (YouTube changes often); applies next start
+sh.Run """" & dir & "\.venv\Scripts\python.exe"" -m pip install -q -U yt-dlp", 0, False

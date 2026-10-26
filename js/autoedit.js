@@ -30,8 +30,7 @@ async function findShots(m, onProgress) {
   c.width = 64; c.height = 36;
   const step = Math.max(0.2, m.duration / 600), samples = [];
   let prev = null;
-  for (let t = 0.05; t < m.duration - 0.05; t += step) {
-    await seekVideo(el, t);
+  const sample = t => {
     g.drawImage(el, 0, 0, 64, 36);
     const d = g.getImageData(0, 0, 64, 36).data, gray = new Float32Array(64 * 36);
     let sum = 0, sq = 0, diff = 0;
@@ -44,8 +43,27 @@ async function findShots(m, onProgress) {
     samples.push({ t, lum: mean, contrast: Math.sqrt(Math.max(0, sq / gray.length - mean * mean)), diff: prev ? diff / gray.length : 0 });
     prev = gray;
     onProgress?.(t / m.duration);
+  };
+  if ('requestVideoFrameCallback' in el) {
+    // play it muted at 16x and grab frames as they come: ~10x faster than seeking each sample
+    await new Promise(resolve => {
+      let last = -Infinity;
+      const onFrame = (_, meta) => {
+        if (meta.mediaTime - last >= step) { last = meta.mediaTime; sample(meta.mediaTime); }
+        if (!el.ended) el.requestVideoFrameCallback(onFrame);
+      };
+      el.requestVideoFrameCallback(onFrame);
+      el.onended = resolve;
+      el.onerror = resolve;
+      el.playbackRate = 16;
+      el.play().catch(resolve);
+    });
+  } else {
+    for (let t = 0.05; t < m.duration - 0.05; t += step) { await seekVideo(el, t); sample(t); }
   }
+  el.pause();
   el.removeAttribute('src');
+  if (samples.length < 4) throw new Error(`Couldn't read “${m.name}”`);
   m.shots = shotsFromSamples(samples, step, m.duration);
   return m.shots;
 }

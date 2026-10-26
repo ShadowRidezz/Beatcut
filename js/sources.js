@@ -51,6 +51,28 @@ async function searchCommons(q) {
   }).filter(Boolean);
 }
 
+// YouTube clip packs (via server.py + yt-dlp). Only there when the app runs on server.py.
+let clipServer;
+const hasClipServer = () => (clipServer ??= fetch('/api/ping').then(r => r.ok).catch(() => false));
+
+async function searchYouTube(q) {
+  const res = await fetch('/api/clips/search?' + new URLSearchParams({ q }));
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Clip search failed (${res.status})`);
+  return data.results;
+}
+
+async function fetchYouTube(id, onProgress) {
+  let job = await (await fetch(`/api/clips/fetch?id=${id}`)).json();
+  while (job.state === 'downloading') {
+    onProgress?.(job.progress || 0);
+    await new Promise(r => setTimeout(r, 700));
+    job = await (await fetch(`/api/clips/status?id=${id}`)).json();
+  }
+  if (job.state !== 'done') throw new Error(job.error || 'Download failed');
+  return download(`/cache/${id}.mp4`);
+}
+
 // fetch with a progress callback (0..1); resolves to a Blob
 async function download(url, onProgress) {
   const res = await fetch(url);

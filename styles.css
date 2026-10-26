@@ -123,6 +123,8 @@ details.keys:not([open]) { display: block; }
 .media .dur { position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: rgba(0, 0, 0, .7); }
 .media .add { position: absolute; right: 4px; top: 4px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; background: var(--accent); color: #fff; opacity: 0; transition: opacity .15s; }
 .media:hover .add, .media .add:focus-visible { opacity: 1; }
+.media .added { position: absolute; right: 4px; top: 4px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; background: rgba(0, 0, 0, .7); color: var(--accent); }
+.modal iframe.yt { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; background: #000; }
 .mname { margin-top: 5px; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msrc { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

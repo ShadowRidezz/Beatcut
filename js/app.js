@@ -531,6 +531,7 @@ function goStep(step) {
   $$('.step').forEach(p => { p.hidden = p.dataset.panel !== step; });
   if (step === 'export') renderExport();
   if (step === 'edit') renderInspector();
+  if (step === 'clips' && clipSource === 'youtube') runYouTubeSearch();
 }
 function updateSteps() {
   const done = { song: !!S.song, clips: S.media.length > 0, edit: S.clips.length > 0 };
@@ -603,7 +604,7 @@ $('#musicResults').addEventListener('click', async e => {
 $('#songFile').addEventListener('change', e => { if (e.target.files[0]) loadSongFile(e.target.files[0]); e.target.value = ''; });
 
 // clips: local library + Wikimedia Commons
-let clipSource = 'local', commonsList = [];
+let clipSource = 'youtube', commonsList = [], ytList = [], ytQuery = '';
 const mediaCard = m => `<div class="media" draggable="true" data-mid="${m.id}">
     <div class="thumb" style="background-image:url(${m.thumb})"><span class="dur">${fmt(m.duration)}</span>
     <button class="add" data-add="${m.id}" title="Add to the end of the timeline"><i data-lucide="plus"></i></button></div>
@@ -628,15 +629,78 @@ async function runCommonsSearch() {
       <p class="fine">Free-licensed or public-domain videos from Wikimedia Commons. Commons mostly has older cartoons, films and real footage — modern movies and anime aren't there.</p>`
     : `<p class="fine">Nothing on Wikimedia Commons for “${esc(q)}”. For modern characters, add your own clips and tag them.</p>`;
 }
-$('#clipForm').addEventListener('submit', e => { e.preventDefault(); clipSource === 'local' ? goStep('edit') : runCommonsSearch(); });
+// clip packs that editors upload for edits ("<name> scene pack", "raw clips")
+async function runYouTubeSearch() {
+  const q = $('#clipQuery').value.trim(), box = $('#clipResults');
+  if (!(await hasClipServer())) {
+    box.innerHTML = '<p class="fine err">Clip search needs Beatcut started with <b>Start Beatcut.vbs</b> (it runs the local helper that fetches clips).</p>';
+    return;
+  }
+  if (!q) { box.innerHTML = '<p class="fine">Type the character above and press Enter. Clip packs of them are found for you.</p>'; return; }
+  if (q === ytQuery && ytList.length) return renderYouTube();
+  box.innerHTML = `<p class="fine">Finding clips of ${esc(q)}…</p>`;
+  try { ytList = await searchYouTube(q); ytQuery = q; }
+  catch (e) { box.innerHTML = `<p class="fine err">${esc(e.message)}</p>`; return; }
+  renderYouTube();
+}
+function renderYouTube() {
+  if (clipSource !== 'youtube') return;
+  const added = new Set(S.media.map(m => m.ytId));
+  $('#clipResults').innerHTML = ytList.length ? `
+    <button class="ghost wide" data-yt-top><i data-lucide="download"></i> Add the top 3 for me</button>
+    <div class="grid">${ytList.map((r, i) => `<div class="media" data-yi="${i}">
+      <div class="thumb"><img src="${esc(r.thumb)}" alt="" loading="lazy"><span class="dur">${fmt(r.duration).slice(0, -2)}</span>
+      ${added.has(r.id) ? '<span class="added"><i data-lucide="check"></i></span>' : `<button class="add" data-yadd="${i}" title="Add"><i data-lucide="plus"></i></button>`}</div>
+      <div class="mname">${esc(r.title)}</div><div class="msrc">YouTube · ${esc(r.channel)}</div></div>`).join('')}</div>
+    <p class="fine">Scene packs and raw clips that editors upload on YouTube. Downloaded at up to 720p.</p>`
+    : `<p class="fine">No clip packs found for “${esc(ytQuery)}”. Try the full name or the show's name.</p>`;
+  refreshIcons();
+}
+async function addYouTube(r, onProgress) {
+  const existing = S.media.find(m => m.ytId === r.id);
+  if (existing) return existing;
+  const blob = await fetchYouTube(r.id, onProgress);
+  return addMedia(blob, r.title, { source: `YouTube · ${r.channel}`, page: r.page, ytId: r.id, tags: ytQuery || $('#clipQuery').value.trim() });
+}
+async function addYouTubeWithToast(list) {
+  for (const [i, r] of list.entries()) {
+    try { await addYouTube(r, p => toast(`Downloading ${i + 1} of ${list.length} · ${Math.round(p * 100)}%`)); }
+    catch (e) { toast(`Couldn't get “${r.title}”: ${e.message}`); }
+    renderYouTube();
+  }
+  toast(`Got ${S.media.length} video${S.media.length === 1 ? '' : 's'}. Go to Make it when you're ready.`);
+}
+function openYouTubeModal(r) {
+  openModal(`<div class="modal-head"><b>${esc(r.title)}</b><button class="icon-btn" data-close><i data-lucide="x"></i></button></div>
+    <iframe class="yt" src="https://www.youtube-nocookie.com/embed/${esc(r.id)}?autoplay=1&mute=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+    <p class="fine"><b>Source:</b> YouTube · ${esc(r.channel)} · ${fmt(r.duration).slice(0, -2)} · <a href="${esc(r.page)}" target="_blank" rel="noopener">open on YouTube</a></p>
+    <div class="row"><button class="primary" id="yAdd"><i data-lucide="download"></i> Add these clips</button></div>`);
+  $('#yAdd').onclick = async () => {
+    const btn = $('#yAdd');
+    btn.disabled = true;
+    try { await addYouTube(r, p => { btn.textContent = `Downloading ${Math.round(p * 100)}%`; }); closeModal(); renderYouTube(); toast('Added'); }
+    catch (e) { btn.disabled = false; btn.textContent = 'Try again'; toast(`Download failed: ${e.message}`); }
+  };
+}
+
+$('#clipForm').addEventListener('submit', e => {
+  e.preventDefault();
+  if (clipSource === 'local') $('#clipTabs [data-src="youtube"]').click();
+  else clipSource === 'youtube' ? runYouTubeSearch() : runCommonsSearch();
+});
 $('#clipTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-src]');
   if (!b) return;
   clipSource = b.dataset.src;
   $$('#clipTabs button').forEach(x => x.classList.toggle('on', x === b));
-  clipSource === 'local' ? renderClipResults() : runCommonsSearch();
+  clipSource === 'local' ? renderClipResults() : clipSource === 'youtube' ? runYouTubeSearch() : runCommonsSearch();
 });
 $('#clipResults').addEventListener('click', e => {
+  const yadd = e.target.closest('[data-yadd]');
+  if (yadd) return addYouTubeWithToast([ytList[yadd.dataset.yadd]]);
+  if (e.target.closest('[data-yt-top]')) return addYouTubeWithToast(ytList.filter(r => !S.media.some(m => m.ytId === r.id)).slice(0, 3));
+  const ycard = e.target.closest('[data-yi]');
+  if (ycard) return openYouTubeModal(ytList[ycard.dataset.yi]);
   const add = e.target.closest('[data-add]');
   if (add) { addClip(mediaById(add.dataset.add)); return toast('Added to the timeline'); }
   const card = e.target.closest('.media');
@@ -696,7 +760,7 @@ function renderInspector() {
       <div class="checks">
         ${check(S.song, S.song ? esc(S.song.name) : 'Pick a song', 'song')}
         ${check(name, name ? esc(name) : 'Type the character', 'clips')}
-        ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage: free clips will be searched online', 'clips')}
+        ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage yet: clips of them will be found for you', 'clips')}
       </div>
       ${chips('style', 'Style', { auto: 'Surprise me', ...STYLES }, S.style)}
       ${S.song && S.song.duration > 40 ? chips('length', 'Length', { 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
@@ -761,16 +825,28 @@ async function makeEdit() {
     if (!pool.length) pool = S.media.slice();
     if (!pool.length) {
       if (!name) throw new Error('Type the character name, or drop some footage of them');
-      status(`Looking for free clips of ${name}…`);
-      const found = (await searchCommons(name)).filter(r => r.duration >= 3 && r.duration <= 600).slice(0, 3);
-      if (!found.length) throw new Error(`No free clips of “${name}” online. Drop some footage of them in step 2.`);
-      for (const [i, r] of found.entries()) {
-        const blob = await download(r.file, p => status(`Downloading clip ${i + 1} of ${found.length} · ${Math.round(p * 100)}%`));
-        pool.push(await addMedia(blob, r.title, { source: 'Wikimedia Commons', credit: r.credit, page: r.page, tags: name }));
+      status(`Finding clips of ${name}…`);
+      if (await hasClipServer()) {
+        if (ytQuery !== name || !ytList.length) { ytList = await searchYouTube(name); ytQuery = name; }
+        const picks = ytList.slice(0, 3);
+        if (!picks.length) throw new Error(`Couldn't find clips of “${name}”. Try the full name, or drop your own footage in step 2.`);
+        for (const [i, r] of picks.entries()) {
+          try { pool.push(await addYouTube(r, p => status(`Downloading clips ${i + 1} of ${picks.length} · ${Math.round(p * 100)}%`))); }
+          catch (e) { console.warn(r.id, e); }
+        }
+        if (!pool.length) throw new Error('The clip downloads failed. Check your internet and try again.');
+      } else {
+        const found = (await searchCommons(name)).filter(r => r.duration >= 3 && r.duration <= 600).slice(0, 3);
+        if (!found.length) throw new Error(`No clips of “${name}” found. Start Beatcut with Start Beatcut.vbs to search more widely, or drop your own footage.`);
+        for (const [i, r] of found.entries()) {
+          const blob = await download(r.file, p => status(`Downloading clip ${i + 1} of ${found.length} · ${Math.round(p * 100)}%`));
+          pool.push(await addMedia(blob, r.title, { source: 'Wikimedia Commons', credit: r.credit, page: r.page, tags: name }));
+        }
       }
     }
     for (const [i, m] of pool.entries()) {
-      await findShots(m, p => status(`Finding the best moments · video ${i + 1} of ${pool.length} · ${Math.round(p * 100)}%`));
+      try { await findShots(m, p => status(`Finding the best moments · video ${i + 1} of ${pool.length} · ${Math.round(p * 100)}%`)); }
+      catch (e) { console.warn(e); m.shots = []; }
     }
     const picks = ['dark', 'noir', 'cold', 'warm'];
     const style = S.style === 'auto' ? picks[Math.floor(Math.random() * picks.length)] : S.style;

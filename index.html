@@ -55,12 +55,13 @@
       </form>
       <label class="drop" id="videoDrop">
         <i data-lucide="film"></i>
-        <span><b>Drop footage of them</b>: clips, scenes or a whole episode. The best moments are found for you.</span>
+        <span><b>Have your own footage?</b> Drop it here. Clips found for you show up below.</span>
         <input type="file" accept="video/*" multiple id="videoFile" hidden>
       </label>
       <div class="tabs" id="clipTabs">
-        <button data-src="local" class="on">Footage</button>
-        <button data-src="commons">Free clips online</button>
+        <button data-src="youtube" class="on">Find clips</button>
+        <button data-src="local">My footage</button>
+        <button data-src="commons">Free archive</button>
       </div>
       <div id="clipResults"></div>
       <button class="primary next" data-goto="edit">Next: make the edit <i data-lucide="arrow-right"></i></button>
