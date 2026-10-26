@@ -1,28 +1,24 @@
-// Online sources. Both need no API key and allow browser downloads (CORS):
-//  - Openverse audio (api.openverse.org): CC-licensed music from Freesound + Wikimedia Commons.
-//    Jamendo is excluded because its file host blocks in-browser downloads.
+// Online sources. Neither needs an API key and both allow browser downloads (CORS):
+//  - iTunes Search: any popular song, as Apple's 30-second preview (usually the hook).
+//    Spotify has no audio API, so a pasted Spotify link is looked up by name (oEmbed) on iTunes.
 //  - Wikimedia Commons video: public-domain / freely licensed clips (old cartoons, films, footage).
 
 const stripHtml = html => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.trim();
 
-async function searchMusic(q) {
-  const url = 'https://api.openverse.org/v1/audio/?' + new URLSearchParams({
-    q, page_size: '20', license_type: 'modification', length: 'medium,long', excluded_source: 'jamendo',
-  });
-  const res = await fetch(url);
-  if (res.status === 429) throw new Error('Openverse rate limit reached — wait a minute and try again.');
-  if (!res.ok) throw new Error(`Openverse error ${res.status}`);
-  const data = await res.json();
-  return data.results.filter(r => r.url).map(r => ({
-    title: r.title || 'Untitled',
-    creator: r.creator || 'Unknown',
-    license: `CC ${r.license.toUpperCase()} ${r.license_version || ''}`.replace('CC CC0', 'CC0').trim(),
-    duration: (r.duration || 0) / 1000,
-    url: r.url,
-    page: r.foreign_landing_url,
-    source: r.source === 'wikimedia_audio' ? 'Wikimedia Commons' : 'Freesound',
-    credit: r.attribution || `"${r.title}" by ${r.creator}`,
+async function searchSongs(q) {
+  let from = null;
+  const sp = q.match(/open\.spotify\.com\/(?:intl-[\w-]+\/)?track\/([A-Za-z0-9]+)/);
+  if (sp) {
+    const res = await fetch('https://open.spotify.com/oembed?url=' + encodeURIComponent(`https://open.spotify.com/track/${sp[1]}`));
+    if (!res.ok) throw new Error("Couldn't read that Spotify link");
+    q = from = (await res.json()).title;
+  }
+  const res = await fetch('https://itunes.apple.com/search?' + new URLSearchParams({ term: q, media: 'music', entity: 'song', limit: '20' }));
+  if (!res.ok) throw new Error(`Song search failed (${res.status}) — wait a moment and try again`);
+  const list = (await res.json()).results.filter(r => r.previewUrl).map(r => ({
+    title: r.trackName, artist: r.artistName, art: r.artworkUrl100, url: r.previewUrl, page: r.trackViewUrl,
   }));
+  return { list, from };
 }
 
 async function searchCommons(q) {

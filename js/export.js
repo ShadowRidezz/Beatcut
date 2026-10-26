@@ -32,7 +32,7 @@ async function mixAudio(duration, sampleRate) {
     src.start(when, offset, length);
   };
   const song = S.song;
-  if (song && song.volume > 0) {
+  if (song && song.volume > 0 && !S.musicOut) {
     play(song.buffer, Math.max(0, song.offset), Math.max(0, -song.offset), undefined, 1, song.volume);
   }
   for (const r of layoutClips(S.clips)) {

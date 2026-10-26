@@ -10,7 +10,8 @@ const refreshIcons = () => window.lucide?.createIcons();
 
 const S = {
   media: [], clips: [], texts: [], song: null,
-  aspect: '1:1', sel: null, t: 0, playing: false, step: 'song', exporting: false, pps: 80,
+  aspect: '9:16', sel: null, t: 0, playing: false, step: 'song', exporting: false, pps: 80,
+  style: 'auto', length: '20', making: false, musicOut: false,
 };
 const mediaById = id => S.media.find(m => m.id === id);
 const getSource = clip => mediaById(clip.mediaId)?.el;
@@ -113,10 +114,10 @@ async function importFiles(files) {
   if (audio && !videos.length) return loadSongFile(audio);
   let added = 0;
   for (const f of videos) {
-    try { await addMedia(f, f.name.replace(/\.[^.]+$/, '')); added++; }
+    try { await addMedia(f, f.name.replace(/\.[^.]+$/, ''), { tags: $('#clipQuery').value.trim() }); added++; }
     catch (e) { toast(`Couldn't open ${f.name}: ${e.message}`); }
   }
-  if (added) toast(`Added ${added} clip${added > 1 ? 's' : ''} — drag onto the timeline or press +`);
+  if (added) toast(`Added ${added} video${added > 1 ? 's' : ''}`);
 }
 
 function addClip(m, index = S.clips.length, from = 0, len = 3) {
@@ -548,9 +549,16 @@ $('#songCard').addEventListener('click', e => {
   if (e.target.closest('#songRemove')) { pause(); removeSong(); if (S.sel?.type === 'song') S.sel = null; renderAll(); }
 });
 
-// music library
-const MUSIC_CHIPS = ['epic', 'cinematic', 'dark', 'sad piano', 'electronic', 'drums', 'hip hop', 'ambient'];
-$('#musicChips').innerHTML = MUSIC_CHIPS.map(c => `<button data-q="${c}">${c}</button>`).join('');
+// songs: iTunes previews (search, Spotify links, popular edit songs)
+const POPULAR = [
+  ['Metamorphosis', 'Metamorphosis Interworld'], ['Murder In My Mind', 'Murder In My Mind Kordhell'],
+  ['Memory Reboot', 'Memory Reboot VØJ Narvent'], ['After Dark', 'After Dark Mr.Kitty'],
+  ['Sleepwalker', 'Sleepwalker akiaura'], ['Rapture', 'Rapture Interworld'], ['Close Eyes', 'Close Eyes DVRST'],
+  ['Another Love', 'Another Love Tom Odell'], ['Little Dark Age', 'Little Dark Age MGMT'],
+  ['Daylight', 'Daylight David Kushner'], ['Can You Feel My Heart', 'Can You Feel My Heart Bring Me The Horizon'],
+  ['Sahara', 'Sahara Hensonn'], ['Snowfall', 'Snowfall Øneheart reidenshi'], ['Space Song', 'Space Song Beach House'],
+];
+$('#musicChips').innerHTML = POPULAR.map(([label, q]) => `<button data-q="${esc(q)}">${esc(label)}</button>`).join('');
 let musicList = [];
 const previewAudio = new Audio();
 previewAudio.onended = previewAudio.onpause = () => $$('#musicResults .result').forEach(r => r.classList.remove('playing'));
@@ -560,13 +568,14 @@ async function runMusicSearch(q) {
   $('#musicQuery').value = q;
   const box = $('#musicResults');
   box.innerHTML = '<p class="fine">Searching…</p>';
-  try { musicList = await searchMusic(q); }
+  let from;
+  try { ({ list: musicList, from } = await searchSongs(q)); }
   catch (e) { box.innerHTML = `<p class="fine err">${esc(e.message)}</p>`; return; }
-  box.innerHTML = musicList.map((r, i) => `<div class="result" data-i="${i}">
-      <button class="icon-btn play-toggle" data-prev="${i}" title="Preview"><i data-lucide="play" class="i-play"></i><i data-lucide="pause" class="i-pause"></i></button>
-      <div class="meta"><b>${esc(r.title)}</b><span>${esc(r.creator)} · ${fmt(r.duration).slice(0, -2)} · ${r.source}</span></div>
-      <a class="badge" href="${esc(r.page)}" target="_blank" rel="noopener" title="Open the original page">${esc(r.license)}</a>
-      <button class="ghost small" data-use="${i}">Use</button></div>`).join('') || '<p class="fine">No tracks found — try a different word.</p>';
+  box.innerHTML = (from ? `<p class="fine">Spotify link: “${esc(from)}”. Pick the matching version below.</p>` : '') +
+    (musicList.map((r, i) => `<div class="result" data-i="${i}">
+      <button class="cover play-toggle" data-prev="${i}" title="Listen" style="background-image:url(${esc(r.art)})"><i data-lucide="play" class="i-play"></i><i data-lucide="pause" class="i-pause"></i></button>
+      <div class="meta"><b>${esc(r.title)}</b><span>${esc(r.artist)}</span></div>
+      <button class="ghost small" data-use="${i}">Use</button></div>`).join('') || '<p class="fine">No songs found. Try the artist name too.</p>');
   refreshIcons();
 }
 $('#musicForm').addEventListener('submit', e => { e.preventDefault(); runMusicSearch($('#musicQuery').value); });
@@ -585,7 +594,8 @@ $('#musicResults').addEventListener('click', async e => {
     use.disabled = true;
     try {
       const blob = await download(r.url, p => { use.textContent = `${Math.round(p * 100)}%`; });
-      await setSong(blob, { name: r.title, source: r.source, credit: r.credit, page: r.page });
+      await setSong(blob, { name: `${r.title} · ${r.artist}`, source: 'Apple Music preview', credit: `“${r.title}” by ${r.artist}`, page: r.page });
+      goStep('clips');
     } catch (err) { toast(`Couldn't download that track (${err.message}). Try another one.`); }
     use.disabled = false; use.textContent = 'Use';
   }
@@ -601,12 +611,8 @@ const mediaCard = m => `<div class="media" draggable="true" data-mid="${m.id}">
 
 function renderClipResults() {
   if (clipSource !== 'local') return;
-  const q = $('#clipQuery').value.trim().toLowerCase();
-  const list = S.media.filter(m => !q || `${m.name} ${m.tags} ${m.credit || ''}`.toLowerCase().includes(q));
-  $('#clipResults').innerHTML = list.length ? `<div class="grid">${list.map(mediaCard).join('')}</div>`
-    : `<p class="fine">${S.media.length
-      ? `No clips match “${esc(q)}”. Tip: click a clip to give it tags (character names), or search the Wikimedia Commons tab.`
-      : 'No clips yet — drop videos above, or search the Wikimedia Commons tab for free clips.'}</p>`;
+  $('#clipResults').innerHTML = S.media.length ? `<div class="grid">${S.media.map(mediaCard).join('')}</div>`
+    : '<p class="fine">No footage yet. That\'s fine: if you skip this, free clips of the character are searched online (mostly classic cartoons and films). For modern movies and anime, drop your own footage.</p>';
   refreshIcons();
 }
 async function runCommonsSearch() {
@@ -622,8 +628,7 @@ async function runCommonsSearch() {
       <p class="fine">Free-licensed or public-domain videos from Wikimedia Commons. Commons mostly has older cartoons, films and real footage — modern movies and anime aren't there.</p>`
     : `<p class="fine">Nothing on Wikimedia Commons for “${esc(q)}”. For modern characters, add your own clips and tag them.</p>`;
 }
-$('#clipForm').addEventListener('submit', e => { e.preventDefault(); clipSource === 'local' ? renderClipResults() : runCommonsSearch(); });
-$('#clipQuery').addEventListener('input', () => { if (clipSource === 'local') renderClipResults(); });
+$('#clipForm').addEventListener('submit', e => { e.preventDefault(); clipSource === 'local' ? goStep('edit') : runCommonsSearch(); });
 $('#clipTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-src]');
   if (!b) return;
@@ -685,14 +690,24 @@ const num = (k, label, v, step = 0.05) => `<label class="num">${label}<input typ
 function renderInspector() {
   const box = $('#inspector'), sel = selected();
   if (!sel) {
-    box.innerHTML = `<h2>Edit</h2>
-      <p class="hint">Click a clip, a text or the song on the timeline to change it.</p>
-      <button class="primary wide" data-act="text"><i data-lucide="type"></i> Add text at playhead</button>
-      <button class="ghost wide" data-act="sync"><i data-lucide="wand-sparkles"></i> Beat sync all clips</button>
-      <div class="keys"><b>Shortcuts</b>
+    const name = $('#clipQuery').value.trim(), made = S.clips.length > 0;
+    const check = (ok, label, step) => `<button class="check ${ok ? 'ok' : ''}" data-goto-step="${step}"><i data-lucide="${ok ? 'circle-check' : 'circle'}"></i>${label}</button>`;
+    box.innerHTML = `<h2>Make the edit</h2>
+      <div class="checks">
+        ${check(S.song, S.song ? esc(S.song.name) : 'Pick a song', 'song')}
+        ${check(name, name ? esc(name) : 'Type the character', 'clips')}
+        ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage: free clips will be searched online', 'clips')}
+      </div>
+      ${chips('style', 'Style', { auto: 'Surprise me', ...STYLES }, S.style)}
+      ${S.song && S.song.duration > 40 ? chips('length', 'Length', { 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
+      <button class="primary wide make" data-act="make" ${S.making ? 'disabled' : ''}><i data-lucide="sparkles"></i> ${made ? 'Make it again (new version)' : 'Make my edit'}</button>
+      <p class="fine" id="makeStatus">${S.making ? 'Starting…' : made ? 'Click anything on the timeline to change it, or go to Export.' : ''}</p>
+      ${made ? `<div class="row wrap"><button class="ghost small" data-act="text"><i data-lucide="type"></i> Add text</button>
+        <button class="ghost small" data-goto-step="export"><i data-lucide="download"></i> Export</button></div>` : ''}
+      <details class="keys"><summary><b>Shortcuts</b></summary>
         <span><kbd>Space</kbd> play / pause</span><span><kbd>S</kbd> split at playhead</span><span><kbd>Del</kbd> delete</span>
         <span><kbd>T</kbd> add text</span><span><kbd>Ctrl</kbd>+<kbd>D</kbd> duplicate</span><span><kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
-        <span><kbd>←</kbd> <kbd>→</kbd> step a frame</span><span><kbd>Ctrl</kbd>+scroll zoom timeline</span></div>`;
+        <span><kbd>←</kbd> <kbd>→</kbd> step a frame</span><span><kbd>Ctrl</kbd>+scroll zoom timeline</span></details>`;
   } else if (sel.type === 'clip') {
     const c = sel.obj, m = mediaById(c.mediaId);
     box.innerHTML = `<h2>Clip</h2><p class="hint">${esc(m.name)} · uses ${fmt(c.in)}–${fmt(c.out)} of ${fmt(m.duration)}</p>
@@ -730,7 +745,46 @@ function renderInspector() {
       ${s.credit ? `<p class="fine">${esc(s.credit)}</p>` : ''}
       <button class="ghost small danger" data-act="delete"><i data-lucide="trash-2"></i> Remove song</button>`;
   }
+  if (sel) box.insertAdjacentHTML('afterbegin', '<button class="back" data-act="back"><i data-lucide="arrow-left"></i> Back to Make the edit</button>');
   refreshIcons();
+}
+
+async function makeEdit() {
+  if (!S.song) { goStep('song'); return toast('Pick a song first'); }
+  const name = $('#clipQuery').value.trim();
+  const status = text => { const el = $('#makeStatus'); if (el) el.textContent = text; };
+  pause();
+  S.making = true;
+  renderInspector();
+  try {
+    let pool = S.media.filter(m => name && `${m.name} ${m.tags}`.toLowerCase().includes(name.toLowerCase()));
+    if (!pool.length) pool = S.media.slice();
+    if (!pool.length) {
+      if (!name) throw new Error('Type the character name, or drop some footage of them');
+      status(`Looking for free clips of ${name}…`);
+      const found = (await searchCommons(name)).filter(r => r.duration >= 3 && r.duration <= 600).slice(0, 3);
+      if (!found.length) throw new Error(`No free clips of “${name}” online. Drop some footage of them in step 2.`);
+      for (const [i, r] of found.entries()) {
+        const blob = await download(r.file, p => status(`Downloading clip ${i + 1} of ${found.length} · ${Math.round(p * 100)}%`));
+        pool.push(await addMedia(blob, r.title, { source: 'Wikimedia Commons', credit: r.credit, page: r.page, tags: name }));
+      }
+    }
+    for (const [i, m] of pool.entries()) {
+      await findShots(m, p => status(`Finding the best moments · video ${i + 1} of ${pool.length} · ${Math.round(p * 100)}%`));
+    }
+    const picks = ['dark', 'noir', 'cold', 'warm'];
+    const style = S.style === 'auto' ? picks[Math.floor(Math.random() * picks.length)] : S.style;
+    const r = buildEdit({ song: S.song, pool, name, style, seed: Date.now() >>> 0, length: +S.length });
+    commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.sel = null; });
+    seek(0);
+    play();
+    toast(`Here's your ${STYLES[style].label.toLowerCase()} edit. Press Make it again for a different version.`);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    S.making = false;
+    renderInspector();
+  }
 }
 
 let pendingEdit = null;
@@ -764,6 +818,11 @@ inspector.addEventListener('click', e => {
   const chip = e.target.closest('.chips button'), act = e.target.closest('[data-act]')?.dataset.act;
   const sel = selected();
   pendingEdit = null;
+  const go = e.target.closest('[data-goto-step]');
+  if (go) return goStep(go.dataset.gotoStep);
+  if (act === 'make') return makeEdit();
+  if (act === 'back') return select(null);
+  if (chip && !sel) { S[chip.parentElement.dataset.k] = chip.dataset.v; return renderInspector(); }
   if (chip && sel) {
     const k = chip.parentElement.dataset.k, raw = chip.dataset.v;
     commit(() => {
@@ -850,10 +909,11 @@ function renderAll() {
 $('#steps').addEventListener('click', e => { const b = e.target.closest('[data-step]'); if (b) goStep(b.dataset.step); });
 $$('[data-goto]').forEach(b => b.addEventListener('click', () => goStep(b.dataset.goto)));
 $('#aspect').addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (b) commit(() => { S.aspect = b.dataset.v; }); });
-$$('#expRes, #expFps').forEach(seg => seg.addEventListener('click', e => {
+$$('#expRes, #expFps, #expMusic').forEach(seg => seg.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   $$('button', seg).forEach(x => x.classList.toggle('on', x === b));
+  S.musicOut = $('#expMusic .on').dataset.v === 'out';
   renderExport();
 }));
 $('#playBtn').addEventListener('click', () => (S.playing ? pause() : play()));

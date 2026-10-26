@@ -1,6 +1,8 @@
 # Beatcut
 
-A browser video editor for character edits synced to music. Plain HTML/CSS/JS, so there's no build step and nothing to install except Python (for a tiny local web server).
+Pick a song, type a character, press **Make my edit**. Beatcut finds the best moments in the footage, cuts them on the beat (faster where the song is louder, a flash and a shake on the hardest hits), grades the colour, and drops the character's name on the drop. You can tweak anything afterwards and then export an MP4.
+
+Plain HTML/CSS/JS with no build step. You only need Python, for a tiny local web server.
 
 ## Run it
 
@@ -12,31 +14,29 @@ A browser video editor for character edits synced to music. Plain HTML/CSS/JS, s
 python -m http.server 8796 --bind 127.0.0.1
 ```
 
-then open http://localhost:8796 in **Chrome or Edge**. MP4 export uses WebCodecs, which needs Chrome or Edge 94 or newer. Other browsers can edit and preview but can't export.
+Then open http://localhost:8796 in **Chrome or Edge**. MP4 export uses WebCodecs, which needs Chrome or Edge 94 or newer.
 
-The page needs internet for its fonts, icons, the MP4 library (loaded from CDNs) and the online search. Your own videos never leave your PC.
+Tests: `node tests/beats.test.js` and `node tests/autoedit.test.js`
 
-Tests for the beat detector: `node tests/beats.test.js`
+## The three steps
 
-## How it works
+1. **Song**: search any song or artist, tap a popular edit song (Metamorphosis, Murder In My Mind, After Dark…), or paste a Spotify link. You get Apple's 30-second preview of the track, which is usually the hook and is the right length for an edit. You can also upload a full song file, and the loudest 15/20/30 seconds are used.
+2. **Character**: type who the edit is about and drop footage of them: clips, scenes or a whole episode. With no footage, free clips of the character are searched and downloaded from Wikimedia Commons automatically.
+3. **Make it**: choose a style (Dark, Noir, Cold, Warm, Vivid, Clean, or Surprise me) and press the button. **Make it again** gives a new version.
 
-1. **Song**: upload audio, or search the royalty-free library and press play to listen first. Beats are detected automatically and shown as red ticks on the timeline.
-2. **Clips**: drop videos in, or search for a character:
-   - **My clips** searches your imported clips by name and tags. Click a clip to tag it (e.g. "anakin, obi-wan").
-   - **Wikimedia Commons** searches free-licensed and public-domain video. Every result shows its source, license and author, and you can preview it before adding.
-3. **Edit** on the timeline: drag clips to reorder, drag the edges to trim, `S` splits, `Del` deletes. **Beat sync** retimes every clip so each cut lands on a beat. Each clip has speed, volume, a look (B&W, Noir, Warm, Cool, Vivid, Faded, Glow), shake, zoom, and a transition in (Flash, Fade, Zoom punch, Blur, Whip). Text comes in Caption, Big word, Serif and Comic styles, with Typewriter, Pop, Fade and Shake animations.
-4. **Export** a 720p or 1080p MP4 (30 or 60 fps) in 9:16, 1:1 or 16:9, with a progress bar. The Credits box has the attribution text to paste into your post.
+Then **Export**: 9:16, 1:1 or 16:9, 720p or 1080p, 30 or 60 fps.
 
-## Sources and keys
+## About the music
 
-| Source | Used for | Key needed? | Notes |
-|---|---|---|---|
-| [Openverse](https://openverse.org) API | Music library | No | Creative Commons tracks from Freesound + Wikimedia Commons, filtered to licenses that allow remixing. Anonymous use has a rate limit (wait a minute if you hit it). Jamendo is left out because its file server blocks in-browser downloads. Credit the artist (CC BY needs it, and the box gives you the text). Some tracks are NC (non-commercial), so don't use those in monetized videos. |
-| [Wikimedia Commons](https://commons.wikimedia.org) API | Character / clip search | No | Public-domain and free-licensed video: old cartoons (Popeye, Superman 1940s, Betty Boop, Felix…), classic films and real footage. |
+- **Spotify** doesn't let any app get its audio: there's no API for it, and its 30-second previews were shut off for new apps in 2024. So a pasted Spotify link is read for the song name, and the same song is fetched from Apple's preview instead.
+- **Song previews** come from the iTunes Search API (no key needed). They're copyrighted songs, so for TikTok, Reels or Shorts choose **Music → Leave it out** on Export and add the same sound inside the app. That way the platform's licence covers it and the video won't get muted.
+- Apple's top-charts feed blocks browser apps, so "Popular for edits" is a built-in list of songs that are common in edits, looked up live on iTunes.
 
-**Modern movie, TV and anime characters are not available from any source that licenses clips for this kind of use.** No API offers them legally. For those, add clips you already have and tag them; the My clips search then finds them by character name.
+## About the footage
 
-## Limits (kept simple on purpose)
-- One video track (clips play back to back) with one text track and one music track. No picture-in-picture and no crossfades between two clips.
-- Projects aren't saved. Reloading the page starts fresh, so export before you close.
-- Tempo detection can land on a related tempo (e.g. 112 instead of 84) on syncopated tracks. The beat ticks still sit on real drum hits.
+Wikimedia Commons only has free footage, which means mostly classic cartoons (Popeye, 1940s Superman, Betty Boop…), old films and real footage. Modern movie, TV and anime characters aren't available from any source that permits this, so for those, drop footage you already have.
+
+## Limits
+- Projects aren't saved. Export before you close the tab.
+- One video track with one text track and one music track. No crossfades.
+- Long footage is sampled at most 600 times, so on a full episode, very short shots can be missed.
