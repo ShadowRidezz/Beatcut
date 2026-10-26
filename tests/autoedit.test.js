@@ -35,6 +35,21 @@ assert(r.clips.some(c => c.trans === 'flash'), 'the drop should get a flash');
 assert.strictEqual(r.texts[0].text, 'Levi');
 assert.deepStrictEqual(buildEdit({ song, pool, name: '', style: 'dark', seed: 42, length: 20 }).texts, []);
 
+// manga (black-and-white) shots never mix with colour ones: the bigger group wins
+const colour = shots.map(s => ({ ...s, sat: 40 }));
+const manga = shots.slice(0, 2).map(s => ({ ...s, sat: 3 }));
+const mixed = buildEdit({ song, pool: [{ id: 'anime', shots: colour }, { id: 'manga', shots: manga }], name: '', style: 'dark', seed: 1, length: 20 });
+assert(mixed.clips.every(c => c.mediaId === 'anime'), 'a manga shot slipped into a colour edit');
+
+// framing: the crop centres on the busy side of the frame
+const { bestPan } = require('../js/autoedit.js');
+const cols = new Float32Array(64); for (let i = 46; i < 56; i++) cols[i] = 10;
+const pan = bestPan(cols, (9 / 16) / (16 / 9));
+assert(pan > 0.7 && pan < 0.85, `pan ${pan}`);
+assert(Math.abs(bestPan(new Float32Array(64), 0.3) - 0.5) < 0.02, "flat frame should stay centred");
+const framed = buildEdit({ song, pool: [{ id: 'w', w: 1280, h: 720, shots: shots.map(s => ({ ...s, cols })) }], name: '', style: 'dark', seed: 3, length: 20 });
+assert(framed.clips.every(c => c.panX > 0.7), 'clips were not framed on the subject');
+
 // long song: picks the loud stretch
 const long = { duration: 120, beats: [], peaks: new Float32Array(120 * 60) };
 for (let i = 0; i < long.peaks.length; i++) long.peaks[i] = i >= 60 * 60 && i < 85 * 60 ? 1 : 0.1;

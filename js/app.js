@@ -3,7 +3,6 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const uid = () => Math.random().toString(36).slice(2, 9);
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = t => { t = Math.max(0, t || 0); const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(1).padStart(4, '0')}`; };
 const refreshIcons = () => window.lucide?.createIcons();
@@ -14,7 +13,10 @@ const S = {
   style: 'auto', length: '20', making: false, musicOut: false,
 };
 const mediaById = id => S.media.find(m => m.id === id);
-const getSource = clip => mediaById(clip.mediaId)?.el;
+// Clips alternate between two players per video, so the next shot can already be rolling
+// when the cut hits (preview cuts land on the beat instead of a frame or two late).
+const getSource = clip => { const m = mediaById(clip.mediaId); return m && (S.clips.indexOf(clip) % 2 ? m.el2 : m.el); };
+const players = () => S.media.flatMap(m => [m.el, m.el2]);
 function projectDuration() {
   const L = layoutClips(S.clips);
   const video = L.length ? L.at(-1).start + L.at(-1).dur : 0;
@@ -92,15 +94,18 @@ async function grabThumb(el) {
 
 async function addMedia(blob, name, extra = {}) {
   const url = URL.createObjectURL(blob);
-  const el = document.createElement('video');
-  el.preload = 'auto'; el.playsInline = true; el.preservesPitch = false; el.src = url;
+  const [el, el2] = [0, 1].map(() => {
+    const v = document.createElement('video');
+    v.preload = 'auto'; v.playsInline = true; v.preservesPitch = false; v.src = url;
+    return v;
+  });
   try {
     await new Promise((ok, fail) => {
       el.onloadeddata = ok;
       el.onerror = () => fail(new Error('this browser cannot play that video format'));
     });
   } catch (e) { URL.revokeObjectURL(url); throw e; }
-  const m = { id: uid(), name, tags: '', source: 'My files', blob, url, el, duration: el.duration, thumb: await grabThumb(el), ...extra };
+  const m = { id: uid(), name, tags: '', source: 'My files', blob, url, el, el2, duration: el.duration, thumb: await grabThumb(el), ...extra };
   S.media.push(m);
   renderClipResults();
   updateSteps();
@@ -184,7 +189,7 @@ function play() {
 }
 function pause() {
   S.playing = false;
-  S.media.forEach(m => m.el.pause());
+  players().forEach(v => v.pause());
   songEl.pause();
   document.body.classList.remove('is-playing');
 }
@@ -193,29 +198,47 @@ function seek(t) {
   if (S.playing) clock = { at: performance.now(), t: S.t };
 }
 
+const PREROLL = 0.6; // seconds before a cut the next shot starts rolling (muted), to lock onto the beat
+
 function syncMedia() {
   const L = layoutClips(S.clips);
   const i = L.findIndex(r => S.t >= r.start && S.t < r.start + r.dur);
   const cur = L[i], next = L[i + 1];
-  const active = cur && mediaById(cur.clip.mediaId).el;
-  for (const m of S.media) if (m.el !== active && !m.el.paused) m.el.pause();
+  const active = cur && getSource(cur.clip), upcoming = next && getSource(next.clip);
+  const toCut = next ? next.start - S.t : Infinity;
+  const preroll = S.playing && upcoming && toCut < PREROLL;
+  for (const v of players()) if (v !== active && !(preroll && v === upcoming) && !v.paused) v.pause();
   if (cur) {
     const c = cur.clip, el = active;
     const want = Math.min(c.in + (S.t - cur.start) * c.speed, el.duration - 0.05);
     el.volume = clamp(c.volume, 0, 1);
     el.muted = c.volume === 0;
     if (S.playing) {
-      el.playbackRate = c.speed;
-      if (Math.abs(el.currentTime - want) > 0.25) el.currentTime = want;
+      const drift = el.currentTime - want;
+      if (Math.abs(drift) > 0.3) el.currentTime = want;
+      // small drift: catch up by speeding/slowing a little instead of a stalling seek
+      el.playbackRate = c.speed * (Math.abs(drift) > 0.025 ? (drift < 0 ? 1.12 : 0.9) : 1);
       if (el.paused) el.play().catch(() => {});
     } else {
       if (!el.paused) el.pause();
       if (!el.seeking && Math.abs(el.currentTime - want) > 0.02) el.currentTime = want;
     }
   }
-  if (next) { // get the next clip's video ready so the cut is instant
-    const nel = mediaById(next.clip.mediaId).el;
-    if (nel !== active && nel.paused && !nel.seeking && Math.abs(nel.currentTime - next.clip.in) > 0.05) nel.currentTime = next.clip.in;
+  if (upcoming && upcoming !== active) {
+    const nc = next.clip;
+    const nwant = nc.in - toCut * nc.speed; // where it should be right now to hit its first frame at the cut
+    if (preroll && upcoming.paused && nwant >= 0) {
+      upcoming.muted = true;
+      upcoming.playbackRate = nc.speed;
+      upcoming.currentTime = nwant + 0.08 * nc.speed; // ~start-up delay of play()
+      upcoming.play().catch(() => {});
+    } else if (preroll && !upcoming.paused) { // steer it onto the right frame before the cut
+      const d = upcoming.currentTime - nwant;
+      if (Math.abs(d) > 0.3) upcoming.currentTime = nwant;
+      upcoming.playbackRate = nc.speed * (Math.abs(d) > 0.01 ? (d < 0 ? 1.25 : 0.8) : 1);
+    } else if (!preroll && upcoming.paused && !upcoming.seeking && Math.abs(upcoming.currentTime - nc.in) > 0.05) {
+      upcoming.currentTime = nc.in;
+    }
   }
   if (S.song) {
     const want = S.t - S.song.offset;
@@ -698,7 +721,10 @@ $('#clipTabs').addEventListener('click', e => {
 $('#clipResults').addEventListener('click', e => {
   const yadd = e.target.closest('[data-yadd]');
   if (yadd) return addYouTubeWithToast([ytList[yadd.dataset.yadd]]);
-  if (e.target.closest('[data-yt-top]')) return addYouTubeWithToast(ytList.filter(r => !S.media.some(m => m.ytId === r.id)).slice(0, 3));
+  if (e.target.closest('[data-yt-top]')) {
+    const fresh = ytList.filter(r => !S.media.some(m => m.ytId === r.id));
+    return addYouTubeWithToast([...fresh.filter(r => !/manga/i.test(r.title)), ...fresh.filter(r => /manga/i.test(r.title))].slice(0, 3));
+  }
   const ycard = e.target.closest('[data-yi]');
   if (ycard) return openYouTubeModal(ytList[ycard.dataset.yi]);
   const add = e.target.closest('[data-add]');
@@ -744,7 +770,7 @@ function openCommonsModal(r) {
 }
 
 // inspector
-const FMT = { speed: v => `${+v}×`, volume: v => `${Math.round(v * 100)}%`, zoom: v => `${Math.round(v * 100)}%`, size: v => (+v).toFixed(1), y: v => `${Math.round(v)}%` };
+const FMT = { panX: v => (Math.abs(v - 0.5) < 0.02 ? 'centre' : v < 0.5 ? 'left' : 'right'), speed: v => `${+v}×`, volume: v => `${Math.round(v * 100)}%`, zoom: v => `${Math.round(v * 100)}%`, size: v => (+v).toFixed(1), y: v => `${Math.round(v)}%` };
 const range = (k, label, v, min, max, step) => `<div class="field"><label>${label} <output>${FMT[k](v)}</output></label>
   <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${v}"></div>`;
 const chips = (k, label, opts, v) => `<div class="field"><label>${label}</label><div class="chips" data-k="${k}">${
@@ -763,7 +789,7 @@ function renderInspector() {
         ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage yet: clips of them will be found for you', 'clips')}
       </div>
       ${chips('style', 'Style', { auto: 'Surprise me', ...STYLES }, S.style)}
-      ${S.song && S.song.duration > 40 ? chips('length', 'Length', { 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
+      ${S.song ? chips('length', 'Length', { 10: '10 s', 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
       <button class="primary wide make" data-act="make" ${S.making ? 'disabled' : ''}><i data-lucide="sparkles"></i> ${made ? 'Make it again (new version)' : 'Make my edit'}</button>
       <p class="fine" id="makeStatus">${S.making ? 'Starting…' : made ? 'Click anything on the timeline to change it, or go to Export.' : ''}</p>
       ${made ? `<div class="row wrap"><button class="ghost small" data-act="text"><i data-lucide="type"></i> Add text</button>
@@ -784,6 +810,8 @@ function renderInspector() {
       ${chips('trans', 'Transition in', TRANSITIONS, c.trans)}
       ${chips('shake', 'Shake', { off: 'Off', soft: 'Soft', hard: 'Hard' }, c.shake)}
       ${range('zoom', 'Zoom / crop', c.zoom, 1, 2, 0.01)}
+      ${range('panX', 'Framing (left ↔ right)', c.panX ?? 0.5, 0, 1, 0.01)}
+      <label class="toggle"><input type="checkbox" data-k="pulse" ${c.pulse ? 'checked' : ''}> Punch in on every beat</label>
       <div class="row wrap">
         <button class="ghost small" data-act="lookall">Apply look to all clips</button>
         <button class="ghost small" data-act="split"><i data-lucide="scissors"></i> Split</button>
@@ -828,7 +856,8 @@ async function makeEdit() {
       status(`Finding clips of ${name}…`);
       if (await hasClipServer()) {
         if (ytQuery !== name || !ytList.length) { ytList = await searchYouTube(name); ytQuery = name; }
-        const picks = ytList.slice(0, 3);
+        // anime packs first: manga-panel packs don't match anime footage
+        const picks = [...ytList.filter(r => !/manga/i.test(r.title)), ...ytList.filter(r => /manga/i.test(r.title))].slice(0, 3);
         if (!picks.length) throw new Error(`Couldn't find clips of “${name}”. Try the full name, or drop your own footage in step 2.`);
         for (const [i, r] of picks.entries()) {
           try { pool.push(await addYouTube(r, p => status(`Downloading clips ${i + 1} of ${picks.length} · ${Math.round(p * 100)}%`))); }
@@ -850,7 +879,11 @@ async function makeEdit() {
     }
     const picks = ['dark', 'noir', 'cold', 'warm'];
     const style = S.style === 'auto' ? picks[Math.floor(Math.random() * picks.length)] : S.style;
-    const r = buildEdit({ song: S.song, pool, name, style, seed: Date.now() >>> 0, length: +S.length });
+    const [aw, ah] = ASPECTS[S.aspect];
+    const r = buildEdit({
+      song: S.song, pool: pool.map(m => ({ id: m.id, shots: m.shots, w: m.el.videoWidth, h: m.el.videoHeight, manga: /manga/i.test(m.name) })),
+      name, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah,
+    });
     commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.sel = null; });
     seek(0);
     play();
@@ -1032,6 +1065,8 @@ document.addEventListener('keydown', e => {
   else if (k === 'arrowright') { e.preventDefault(); seek(S.t + (e.shiftKey ? 1 : 1 / 30)); }
 });
 
+// canvas text only uses web fonts that are already loaded
+['300 20px Oswald', '500 20px "Cormorant Garamond"', '20px Anton', '600 20px Inter'].forEach(f => document.fonts.load(f));
 goStep('song');
 renderAll();
 requestAnimationFrame(tick);

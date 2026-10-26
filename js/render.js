@@ -6,7 +6,7 @@ const ASPECTS = { '1:1': [1080, 1080], '9:16': [1080, 1920], '16:9': [1920, 1080
 const LOOKS = {
   none:  { label: 'None' },
   bw:    { label: 'B&W', css: 'grayscale(1) contrast(1.2)' },
-  noir:  { label: 'Noir', css: 'grayscale(1) contrast(1.7) brightness(.85)' },
+  noir:  { label: 'Noir', css: 'grayscale(1) contrast(1.55) brightness(1.02)' },
   warm:  { label: 'Warm', css: 'saturate(1.3) contrast(1.08)', tint: 'rgba(255,110,20,.35)' },
   cool:  { label: 'Cool', css: 'saturate(.85) contrast(1.12)', tint: 'rgba(30,110,255,.4)' },
   vivid: { label: 'Vivid', css: 'saturate(1.7) contrast(1.15)' },
@@ -15,15 +15,18 @@ const LOOKS = {
 const TRANSITIONS = { none: 'Cut', flash: 'Flash', fade: 'Fade in', zoom: 'Zoom punch', blur: 'Blur in', whip: 'Whip' };
 const TRANSITION_LEN = 0.3;
 
+// Matched to the inspiration edits: thin lowercase captions with a dark glow, classic serif with a
+// white glow, huge hollow neon outlines, and a filled condensed word with a drop shadow.
 const TEXT_STYLES = {
-  caption: { label: 'Caption', font: '600 {s}px Inter', lower: true, size: 4.5, shadow: true },
-  big:     { label: 'Big word', font: '{s}px Anton', upper: true, size: 28, stroke: 0.05, fit: true },
-  serif:   { label: 'Serif', font: '600 {s}px "Playfair Display"', size: 8, glow: true },
-  comic:   { label: 'Comic', font: '{s}px Bangers', size: 13, stroke: 0.09, fit: true },
+  caption: { label: 'Caption', font: '300 {s}px Oswald', lower: true, size: 4.2, shadow: true, spacing: 0.02 },
+  serif:   { label: 'Serif', font: '500 {s}px "Cormorant Garamond"', size: 7, glow: true, spacing: 0.02 },
+  big:     { label: 'Outline', font: '{s}px Anton', upper: true, size: 30, hollow: 0.012, fit: true, spacing: 0.04 },
+  bold:    { label: 'Bold', font: '{s}px Anton', upper: true, size: 9, drop: true, fit: true, spacing: 0.01 },
 };
 const TEXT_ANIMS = { none: 'None', type: 'Typewriter', pop: 'Pop', fade: 'Fade', shake: 'Shake' };
 
 const clipDur = c => (c.out - c.in) / c.speed;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 function layoutClips(clips) {
   let s = 0;
   return clips.map(clip => { const r = { clip, start: s, dur: clipDur(clip) }; s += r.dur; return r; });
@@ -41,17 +44,28 @@ function drawFrame(ctx, W, H, t, project, getSource) {
   ctx.fillRect(0, 0, W, H);
   const hit = clipAt(project.clips, t);
   const src = hit && getSource(hit.clip);
-  if (src && src.videoWidth) drawClip(ctx, W, H, hit.clip, t - hit.start, src, t);
+  if (src && src.videoWidth) drawClip(ctx, W, H, hit.clip, t - hit.start, src, t, project.song);
   for (const tx of project.texts) {
     if (t >= tx.start && t < tx.start + tx.dur) drawText(ctx, W, H, tx, t - tx.start);
   }
   ctx.restore();
 }
 
-function drawClip(ctx, W, H, c, local, src, t) {
+// seconds since the last beat at timeline time t (Infinity with no song)
+function sinceBeat(song, t) {
+  if (!song?.beats.length) return Infinity;
+  const b = song.beats, x = t - song.offset;
+  let lo = 0, hi = b.length - 1;
+  if (x < b[0]) return Infinity;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (b[mid] <= x) lo = mid; else hi = mid - 1; }
+  return x - b[lo];
+}
+
+function drawClip(ctx, W, H, c, local, src, t, song) {
   const p = Math.min(1, local / TRANSITION_LEN), inv = 1 - p;
   const tr = local < TRANSITION_LEN ? c.trans : 'none';
   let scale = Math.max(W / src.videoWidth, H / src.videoHeight) * c.zoom;
+  if (c.pulse) scale *= 1 + 0.05 * Math.exp(-sinceBeat(song, t) / 0.08); // punch-in on every beat
   let dx = 0, dy = 0, blur = 0;
   if (tr === 'zoom') scale *= 1 + 0.35 * inv * inv;
   if (tr === 'blur') blur = inv * 18;
@@ -64,7 +78,8 @@ function drawClip(ctx, W, H, c, local, src, t) {
   const look = LOOKS[c.look] || LOOKS.none;
   const css = [look.css, blur ? `blur(${blur * W / 1080}px)` : ''].filter(Boolean).join(' ');
   const w = src.videoWidth * scale, h = src.videoHeight * scale;
-  const x = (W - w) / 2 + dx, y = (H - h) / 2 + dy;
+  // panX = which part of the source sits in the middle of the frame (0.5 = centre), never showing an edge
+  const x = clamp(W / 2 - w * (c.panX ?? 0.5), W - w, 0) + dx, y = (H - h) / 2 + dy;
   ctx.filter = css || 'none';
   ctx.drawImage(src, x, y, w, h);
   if (c.glow) {
@@ -105,29 +120,40 @@ function drawText(ctx, W, H, tx, local) {
   let size = tx.size / 100 * H;
   const lines = str.split('\n');
   ctx.save();
-  ctx.font = st.font.replace('{s}', size);
+  const setFont = () => {
+    ctx.font = st.font.replace('{s}', size);
+    ctx.letterSpacing = `${(st.spacing || 0) * size}px`;
+  };
+  setFont();
   if (st.fit) {
     const widest = Math.max(...lines.map(l => ctx.measureText(l).width));
-    if (widest > W * 0.94) { size *= W * 0.94 / widest; ctx.font = st.font.replace('{s}', size); }
+    if (widest > W * 0.92) { size *= W * 0.92 / widest; setFont(); }
   }
   ctx.globalAlpha = Math.max(0, alpha);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.translate(W / 2 + dx, tx.y / 100 * H + dy);
   ctx.scale(scale, scale);
-  const lh = size * 1.1;
+  const lh = size * 1.05;
   lines.forEach((line, i) => {
     const y = (i - (lines.length - 1) / 2) * lh;
-    if (st.shadow) { ctx.shadowColor = 'rgba(0,0,0,.75)'; ctx.shadowBlur = size * 0.4; }
-    if (st.glow) { ctx.shadowColor = 'rgba(255,255,255,.7)'; ctx.shadowBlur = size * 0.5; }
-    if (st.stroke) {
+    if (st.hollow) { // outline only, glowing in its own colour
       ctx.lineJoin = 'round';
-      ctx.lineWidth = size * st.stroke * 2;
-      ctx.strokeStyle = tx.stroke || '#000';
+      ctx.lineWidth = Math.max(1.5, H * st.hollow);
+      ctx.strokeStyle = tx.color;
+      ctx.shadowColor = tx.color;
+      ctx.shadowBlur = size * 0.25;
       ctx.strokeText(line, 0, y);
+      ctx.shadowBlur = 0;
+      ctx.strokeText(line, 0, y);
+      return;
     }
+    if (st.shadow) { ctx.shadowColor = 'rgba(0,0,0,.85)'; ctx.shadowBlur = size * 0.6; }
+    if (st.glow) { ctx.shadowColor = 'rgba(255,255,255,.55)'; ctx.shadowBlur = size * 0.45; }
+    if (st.drop) { ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowOffsetY = size * 0.06; ctx.shadowBlur = size * 0.15; }
     ctx.fillStyle = tx.color;
     ctx.fillText(line, 0, y);
+    if (st.glow) { ctx.shadowBlur = size * 0.12; ctx.fillText(line, 0, y); } // tight inner glow on top of the wide one
   });
   ctx.restore();
 }

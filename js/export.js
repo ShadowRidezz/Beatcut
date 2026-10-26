@@ -90,7 +90,7 @@ async function exportMp4({ width, height, fps, bitrate, onProgress, signal }) {
     const t = i / fps;
     const hit = clipAt(S.clips, t);
     if (hit) {
-      const el = mediaById(hit.clip.mediaId).el;
+      const el = getSource(hit.clip);
       await seekVideo(el, Math.min(hit.clip.in + (t - hit.start) * hit.clip.speed, el.duration - 0.001));
     }
     drawFrame(ctx, width, height, t, S, getSource);
