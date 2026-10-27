@@ -147,7 +147,7 @@ function drawText(ctx, W, H, tx, local) {
   };
   setFont();
   if (st.fit) {
-    const widest = Math.max(...lines.map(l => ctx.measureText(l).width));
+    const widest = Math.max(...(st.upper ? full.toUpperCase() : full).split('\n').map(l => ctx.measureText(l).width));
     if (widest > W * 0.92) { size *= W * 0.92 / widest; setFont(); }
   } else {
     // wrap the whole text once, then show only the words revealed so far, so lines never jump

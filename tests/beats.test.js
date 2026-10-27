@@ -19,7 +19,7 @@ for (const [bpm, start] of [[120, 0.25], [95, 0.6], [150, 0.1]]) {
   assert(Math.abs(got - bpm) <= 2, `tempo ${bpm}: got ${got}`);
   const period = 60 / bpm;
   const off = beats.map(b => { const k = (b - start) / period; return Math.abs(k - Math.round(k)) * period; });
-  assert(Math.max(...off.slice(1)) < 0.03, `beats ${bpm} off grid by ${Math.max(...off)}`);
+  assert(Math.max(...off.slice(1)) < 0.006, `beats ${bpm} off the hits by ${Math.max(...off.slice(1))}`);
   assert(beats.length >= Math.floor(20 / period) - 2, `beats ${bpm}: only ${beats.length}`);
   console.log(`ok ${bpm} bpm -> ${got}, ${beats.length} beats`);
 }

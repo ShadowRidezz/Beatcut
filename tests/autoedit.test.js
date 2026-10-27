@@ -42,12 +42,10 @@ assert.strictEqual(dropClip.c.trans, 'flash');
 assert.strictEqual(r.clips[0].trans, 'blur');
 assert(r.clips.at(-1).fadeOut && r.clips.slice(0, -1).every(c => !c.fadeOut), 'only the last clip fades out');
 assert(r.clips.some(c => c.trans === 'smear') && r.clips.some(c => c.trans === 'zoomblur'), 'motion transitions missing');
-const titled = buildEdit({ song, pool, name: 'Levi', title: 'a true warrior', style: 'dark', seed: 42, length: 20 });
-assert.deepStrictEqual(titled.texts.map(x => x.text), ['A', 'TRUE', 'WARRIOR']);
-const last = titled.texts.at(-1);
-assert(Math.abs(last.start + last.dur - (15 + titled.offset)) < 1e-6, 'title must end on the drop');
-assert(titled.texts.every((x, i) => i === 0 || Math.abs(titled.texts[i - 1].start + titled.texts[i - 1].dur - x.start) < 1e-6), 'title words should follow each other beat by beat');
-assert.strictEqual(r.texts[0].text, 'LEVI');
+// no dialogue: the name lands on the drop itself, never before it with nothing being said
+const nameText = r.texts[0];
+assert.strictEqual(nameText.text, 'Levi');
+assert(Math.abs(nameText.start - (15 + r.offset)) < 1e-6, `name at ${nameText.start}`);
 assert.deepStrictEqual(buildEdit({ song, pool, name: '', style: 'dark', seed: 42, length: 20 }).texts, []);
 
 // manga (black-and-white) shots never mix with colour ones: the bigger group wins
@@ -82,29 +80,42 @@ for (const c of heroEdit.clips) { const d = (c.out - c.in) / c.speed; if (tt < 1
 assert(titleClip && titleClip.in >= withHero[3].start - 1e-9 && titleClip.in < withHero[3].end, 'the title cut should use the hero shot');
 assert.strictEqual(heroEdit.clips.filter(c => c.in >= withHero[3].start - 1e-9 && c.in < withHero[3].end).length >= 1, true);
 
-// spoken intro: a line of dialogue at normal speed with its voice, captions on the real word times
+// voice-over intro: a line of dialogue plays over the intro shots, its last word ending right at
+// the drop; earlier lines are small captions, the last line big words each shown as it's spoken
 const speech = { segments: [
   { start: 0.1, end: 2.0, text: 'cut off start', logprob: -0.3, words: [[0.1, 0.5, 'cut'], [0.6, 1.0, 'off'], [1.1, 2.0, 'start']] },
   { start: 3.0, end: 4.6, text: 'I have no enemies.', logprob: -0.2, words: [[3.0, 3.2, 'I'], [3.3, 3.6, 'have'], [3.7, 3.9, 'no'], [4.0, 4.6, 'enemies.']] },
-  { start: 5.0, end: 6.0, text: 'Nobody does.', logprob: -0.2, words: [[5.0, 5.4, 'Nobody'], [5.5, 6.0, 'does.']] },
+  { start: 5.0, end: 6.0, text: 'A true warrior.', logprob: -0.2, words: [[5.0, 5.2, 'A'], [5.3, 5.6, 'true'], [5.7, 6.0, 'warrior.']] },
   { start: 20, end: 40, text: 'a very long speech that never ends', logprob: -0.2, words: [[20, 25, 'a'], [25, 30, 'very'], [30, 35, 'long'], [35, 40, 'speech']] },
 ] };
 const picked = pickLines(speech.segments, 5);
-assert(picked && picked.list[0].text === 'I have no enemies.', 'should pick the clean line, not the cut-off first one');
+assert(picked && picked.list[0].text === 'I have no enemies.', 'should pick the clean lines, not the cut-off first one');
 const talky = buildEdit({ song, pool, name: 'Levi', style: 'dark', seed: 4, length: 20,
   dialogue: { id: 'talk', speech, shots: [], duration: 60, w: 1280, h: 720 } });
-const open = talky.clips[0];
-assert.strictEqual(open.mediaId, 'talk');
-assert.strictEqual(open.speed, 1);
-assert.strictEqual(open.volume, 1);
-assert(talky.duckUntil > 0 && Math.abs(talky.duckUntil - (open.out - open.in)) < 1e-6, 'music should duck exactly while the dialogue plays');
+const drop = 15 + talky.offset, v = talky.voice;
+assert(v && v.mediaId === 'talk', 'voice-over missing');
+assert(talky.clips.every(c => c.mediaId !== 'talk' && c.volume === 0), 'intro shots come from the footage; only the voice is heard');
+const tlOf = m => v.at + (m - v.in); // dialogue time -> timeline
+assert(Math.abs(tlOf(6.0) - (drop - 0.12)) < 1e-6, `last word should end just before the drop, ends at ${tlOf(6.0)} vs ${drop}`);
+assert(Math.abs(talky.duckUntil - (v.at + v.dur)) < 1e-6, 'music should duck exactly while the voice plays');
 const caps = talky.texts.filter(x => x.style === 'caption');
-assert(caps.length >= 1 && caps[0].text === 'I have no enemies.', `captions: ${caps.map(c => c.text)}`);
-assert.deepStrictEqual(caps[0].wordTimes.map(v => +v.toFixed(2)), [0, 0.3, 0.7, 1]);
-assert(Math.abs(open.in + caps[0].start - 3.0) < 1e-6, 'caption must start when the line is spoken');
-assert(talky.texts.some(x => x.text === 'LEVI'), 'title still lands before the drop');
+assert.deepStrictEqual(caps.map(c => c.text), ['I have no enemies.']);
+assert(Math.abs(caps[0].start - tlOf(3.0)) < 1e-6, 'caption must start when the line is spoken');
+assert.deepStrictEqual(caps[0].wordTimes.map(x => +x.toFixed(2)), [0, 0.3, 0.7, 1]);
+const bigWords = talky.texts.filter(x => x.style !== 'caption');
+assert.deepStrictEqual(bigWords.map(x => x.text), ['A', 'TRUE', 'WARRIOR.']);
+assert(bigWords.every((x, i) => Math.abs(x.start - tlOf(speech.segments[2].words[i][0])) < 1e-6), 'each big word must appear as it is spoken');
+assert(Math.abs(bigWords.at(-1).start + bigWords.at(-1).dur - drop) < 1e-6, 'the last big word holds until the drop');
+// a fast last line builds up in one big text instead of flashing word by word
+const fastSpeech = { segments: [speech.segments[1], { start: 5.0, end: 5.6, text: 'Shoot him now.', logprob: -0.2, words: [[5.0, 5.15, 'Shoot'], [5.2, 5.35, 'him'], [5.4, 5.6, 'now.']] }] };
+const fastEdit = buildEdit({ song, pool, name: 'Levi', style: 'dark', seed: 4, length: 20, dialogue: { id: 'talk', speech: fastSpeech, shots: [], duration: 60 } });
+const built = fastEdit.texts.filter(x => x.style !== 'caption');
+assert.strictEqual(built.length, 1);
+assert.strictEqual(built[0].text, 'SHOOT HIM NOW.');
+assert.deepStrictEqual(built[0].wordTimes.map(x => +x.toFixed(2)), [0, 0.2, 0.4]);
 const silent = buildEdit({ song, pool, name: 'Levi', style: 'dark', seed: 4, length: 20 });
 assert.strictEqual(silent.duckUntil, 0);
+assert.strictEqual(silent.voice, null);
 
 // long song: frames the edit around the drop
 const long = { duration: 120, beats: [], peaks: new Float32Array(120 * 60) };

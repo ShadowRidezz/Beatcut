@@ -35,7 +35,7 @@ lock = threading.Lock()
 
 QUERIES = {
     "clips": ("{} scene pack", "{} raw clips for edits"),
-    "dialogue": ("{} english dub scene",),
+    "dialogue": ("{} english dub fight", "{} english dub scene"),
 }
 
 

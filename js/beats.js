@@ -56,9 +56,29 @@ function detectBeats(samples, sampleRate) {
   for (let k = phase; k < n; k += lag) {
     let at = Math.round(k), top = flat[at] || 0;
     for (let j = at - reach; j <= at + reach; j++) if ((flat[j] || 0) > top) { top = flat[j]; at = j; }
-    beats.push(+(at / fps).toFixed(3));
+    beats.push(at / fps);
   }
-  return { bpm: Math.round(60 * fps / lag), beats };
+  return { bpm: Math.round(60 * fps / lag), beats: refineBeats(samples, sampleRate, beats) };
+}
+
+// Moves each beat onto the sharpest attack within ±40 ms, on a 2 ms grid, so cuts land on the
+// hit itself (the coarse envelope above is only accurate to a few tens of ms).
+function refineBeats(samples, sampleRate, beats) {
+  const fh = Math.max(1, Math.round(sampleRate * 0.002)), fw = fh * 3;
+  const level = i => {
+    let e = 0;
+    for (let j = i * fh, end = Math.min(samples.length, j + fw); j < end; j++) e += samples[j] * samples[j];
+    return Math.log(1 + 1000 * e / fw);
+  };
+  return beats.map(b => {
+    const c = Math.round(b * sampleRate / fh);
+    let best = c, rise = -Infinity;
+    for (let k = Math.max(3, c - 20); k <= c + 20; k++) {
+      const r = level(k) - level(k - 3);
+      if (r > rise) { rise = r; best = k; }
+    }
+    return +((best * fh + fh) / sampleRate).toFixed(3);
+  });
 }
 
 // Max-abs per bucket, for drawing the waveform.

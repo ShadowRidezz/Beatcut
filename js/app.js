@@ -10,7 +10,7 @@ const refreshIcons = () => window.lucide?.createIcons();
 const S = {
   media: [], clips: [], texts: [], song: null,
   aspect: '9:16', sel: null, t: 0, playing: false, step: 'song', exporting: false, pps: 80,
-  style: 'auto', length: '20', making: false, musicOut: false, title: '',
+  style: 'auto', length: '20', making: false, musicOut: false, voice: null,
 };
 const mediaById = id => S.media.find(m => m.id === id);
 // Clips alternate between two players per video, so the next shot can already be rolling
@@ -36,11 +36,11 @@ function selected() {
 const undoStack = [], redoStack = [];
 const snapshot = () => JSON.stringify({
   clips: S.clips, texts: S.texts, aspect: S.aspect,
-  song: S.song && { offset: S.song.offset, volume: S.song.volume, duckUntil: S.song.duckUntil || 0 },
+  song: S.song && { offset: S.song.offset, volume: S.song.volume, duckUntil: S.song.duckUntil || 0 }, voice: S.voice,
 });
 function restore(json) {
   const d = JSON.parse(json);
-  S.clips = d.clips; S.texts = d.texts; S.aspect = d.aspect;
+  S.clips = d.clips; S.texts = d.texts; S.aspect = d.aspect; S.voice = d.voice;
   if (S.song && d.song) Object.assign(S.song, d.song);
   if (!selected()) S.sel = null;
   renderAll();
@@ -140,8 +140,6 @@ function addClip(m, index = S.clips.length, from = 0, len = 3) {
 // ---------- song ----------
 let audioCtx;
 const actx = () => (audioCtx ||= new AudioContext());
-const songEl = new Audio();
-songEl.preload = 'auto';
 
 async function setSong(blob, meta) {
   toast('Analysing beats…');
@@ -160,7 +158,6 @@ async function setSong(blob, meta) {
     ...meta, blob, url, buffer, duration: buffer.duration, offset: 0, volume: 1, bpm, beats,
     peaks: computePeaks(mono, Math.min(6000, Math.ceil(buffer.duration * 60))),
   };
-  songEl.src = url;
   renderAll();
   toast(bpm ? `${bpm} BPM · ${beats.length} beats marked on the timeline` : 'Song added (no clear beat found)');
 }
@@ -177,25 +174,45 @@ function sizeCanvas() {
 }
 new ResizeObserver(sizeCanvas).observe($('#viewer'));
 
-let clock = { at: 0, t: 0 };
+// The song plays through Web Audio and is the clock: the picture follows the moment the sound
+// actually reaches the speakers (output latency included), so cuts look exactly on the beat.
+let clock = { at: 0, t: 0, ctxAt: 0 }, songNode = null, songGain = null;
 const maxTime = () => Math.max(projectDuration(), S.song ? S.song.offset + S.song.duration : 0);
+const audioDelay = () => (audioCtx ? (audioCtx.outputLatency || 0) + (audioCtx.baseLatency || 0) : 0);
+function stopSong() {
+  try { songNode?.stop(); } catch { /* not started */ }
+  songNode = null;
+}
+function startClock() {
+  stopSong();
+  const ctx = actx(), when = ctx.currentTime + 0.05;
+  clock = { at: performance.now() + 50, t: S.t, ctxAt: when };
+  if (!S.song) return;
+  songGain ??= (() => { const g = ctx.createGain(); g.connect(ctx.destination); return g; })();
+  songNode = ctx.createBufferSource();
+  songNode.buffer = S.song.buffer;
+  songNode.connect(songGain);
+  const at = S.t - S.song.offset; // position in the song
+  if (at >= 0) { if (at < S.song.duration) songNode.start(when, at); }
+  else songNode.start(when - at, 0);
+}
 function play() {
   if (S.exporting || !projectDuration()) return;
   if (S.t >= projectDuration() - 0.05) S.t = 0;
   S.playing = true;
-  clock = { at: performance.now(), t: S.t };
-  actx().resume();
+  actx().resume().then(() => { if (S.playing) startClock(); });
+  startClock();
   document.body.classList.add('is-playing');
 }
 function pause() {
   S.playing = false;
   players().forEach(v => v.pause());
-  songEl.pause();
+  stopSong();
   document.body.classList.remove('is-playing');
 }
 function seek(t) {
   S.t = clamp(t, 0, maxTime());
-  if (S.playing) clock = { at: performance.now(), t: S.t };
+  if (S.playing) startClock();
 }
 
 const PREROLL = 0.6; // seconds before a cut the next shot starts rolling (muted), to lock onto the beat
@@ -207,7 +224,8 @@ function syncMedia() {
   const active = cur && getSource(cur.clip), upcoming = next && getSource(next.clip);
   const toCut = next ? next.start - S.t : Infinity;
   const preroll = S.playing && upcoming && toCut < PREROLL;
-  for (const v of players()) if (v !== active && !(preroll && v === upcoming) && !v.paused) v.pause();
+  const voiceEl = S.voice && mediaById(S.voice.mediaId)?.el;
+  for (const v of players()) if (v !== active && v !== voiceEl && !(preroll && v === upcoming) && !v.paused) v.pause();
   if (cur) {
     const c = cur.clip, el = active;
     const want = Math.min(c.in + (S.t - cur.start) * c.speed, el.duration - 0.05);
@@ -240,19 +258,27 @@ function syncMedia() {
       upcoming.currentTime = nc.in;
     }
   }
-  if (S.song) {
-    const want = S.t - S.song.offset;
-    songEl.volume = clamp(S.song.volume * (S.t < (S.song.duckUntil || 0) ? DUCK : 1), 0, 1);
-    if (S.playing && want >= 0 && want < S.song.duration) {
-      if (Math.abs(songEl.currentTime - want) > 0.12) songEl.currentTime = want;
-      if (songEl.paused) songEl.play().catch(() => {});
-    } else if (!songEl.paused) songEl.pause();
+  if (songGain) {
+    const level = S.song ? S.song.volume * (S.t < (S.song.duckUntil || 0) ? DUCK : 1) : 0;
+    songGain.gain.setTargetAtTime(level, audioCtx.currentTime, 0.03);
+  }
+  if (voiceEl) { // the intro's dialogue, laid over the intro shots
+    const v = S.voice, want = v.in + (S.t - v.at);
+    voiceEl.volume = clamp(v.volume, 0, 1);
+    voiceEl.muted = false;
+    if (S.playing && S.t >= v.at && S.t < v.at + v.dur) {
+      voiceEl.playbackRate = 1;
+      if (Math.abs(voiceEl.currentTime - want) > 0.08) voiceEl.currentTime = want;
+      if (voiceEl.paused) voiceEl.play().catch(() => {});
+    } else if (!voiceEl.paused) voiceEl.pause();
   }
 }
 
 function tick() {
   if (S.playing) {
-    S.t = clock.t + (performance.now() - clock.at) / 1000;
+    S.t = songNode
+      ? clock.t + Math.max(0, audioCtx.currentTime - clock.ctxAt - audioDelay())
+      : clock.t + Math.max(0, performance.now() - clock.at) / 1000;
     if (S.t >= projectDuration()) { S.t = projectDuration(); pause(); }
   }
   if (!S.exporting) {
@@ -519,8 +545,7 @@ function addText() {
 function removeSong() {
   if (!S.song) return;
   URL.revokeObjectURL(S.song.url);
-  songEl.pause();
-  songEl.removeAttribute('src');
+  stopSong();
   S.song = null;
 }
 // Retime the clips so every cut lands on a beat (every N beats). A clip whose source is too
@@ -789,8 +814,7 @@ function renderInspector() {
         ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage yet: clips of them will be found for you', 'clips')}
       </div>
       ${chips('style', 'Style', { auto: 'Surprise me', ...STYLES }, S.style)}
-      <div class="field"><label>Title before the drop <span class="fine">optional, one word per beat</span></label>
-        <input id="makeTitle" value="${esc(S.title)}" placeholder="${esc(name || 'e.g. a true warrior')}"></div>
+
       ${S.song ? chips('length', 'Length', { 10: '10 s', 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
       <button class="primary wide make" data-act="make" ${S.making ? 'disabled' : ''}><i data-lucide="sparkles"></i> ${made ? 'Make it again (new version)' : 'Make my edit'}</button>
       <p class="fine" id="makeStatus">${S.making ? 'Starting…' : made ? 'Click anything on the timeline to change it, or go to Export.' : ''}</p>
@@ -902,9 +926,9 @@ async function makeEdit() {
     const [aw, ah] = ASPECTS[S.aspect];
     const r = buildEdit({
       song: S.song, pool: pool.map(m => ({ id: m.id, shots: m.shots, w: m.el.videoWidth, h: m.el.videoHeight, manga: /manga/i.test(m.name) })),
-      name, title: S.title, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah, dialogue,
+      name, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah, dialogue,
     });
-    commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.song.duckUntil = r.duckUntil; S.sel = null; });
+    commit(() => { S.clips = r.clips; S.texts = r.texts; S.voice = r.voice; S.song.offset = r.offset; S.song.duckUntil = r.duckUntil; S.sel = null; });
     seek(0);
     play();
     toast(`Here's your ${STYLES[style].label.toLowerCase()} edit. Press Make it again for a different version.`);
@@ -921,7 +945,6 @@ const inspector = $('#inspector');
 inspector.addEventListener('focusin', () => { pendingEdit ??= snapshot(); });
 inspector.addEventListener('pointerdown', () => { pendingEdit ??= snapshot(); });
 inspector.addEventListener('input', e => {
-  if (e.target.id === 'makeTitle') { S.title = e.target.value; return; }
   const k = e.target.dataset.k, sel = selected();
   if (!k || !sel) return;
   const o = sel.obj, el = e.target;

@@ -43,6 +43,10 @@ async function mixAudio(duration, sampleRate) {
     src.connect(gain).connect(ctx.destination);
     src.start(Math.max(0, song.offset), Math.max(0, -song.offset));
   }
+  if (S.voice && S.voice.volume > 0) {
+    const buf = await mediaAudio(ctx, mediaById(S.voice.mediaId));
+    if (buf) play(buf, S.voice.at, S.voice.in, S.voice.dur, 1, S.voice.volume);
+  }
   for (const r of layoutClips(S.clips)) {
     if (r.clip.volume <= 0) continue;
     const buf = await mediaAudio(ctx, mediaById(r.clip.mediaId));
