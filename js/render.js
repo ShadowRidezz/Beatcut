@@ -14,6 +14,7 @@ const LOOKS = {
 };
 const TRANSITIONS = { none: 'Cut', flash: 'Flash', smear: 'Smear', zoomblur: 'Zoom blur', fade: 'Fade in', zoom: 'Zoom punch', blur: 'Blur in', whip: 'Whip' };
 const TRANSITION_LEN = 0.3;
+const DUCK = 0.2; // music level while the intro dialogue plays
 // motion transitions smear a few frames on BOTH sides of the cut, like the reference edits
 const MOTION = { smear: true, zoomblur: true }, SMEAR_IN = 0.12, SMEAR_OUT = 0.08;
 
@@ -122,11 +123,13 @@ function drawText(ctx, W, H, tx, local) {
   const st = TEXT_STYLES[tx.style] || TEXT_STYLES.caption;
   let str = st.upper ? tx.text.toUpperCase() : st.lower ? tx.text.toLowerCase() : tx.text;
   let alpha = 1, scale = 1, dx = 0, dy = 0;
+  const full = str;
   if (tx.anim === 'type') {
     // words appear one by one over the first 70% (max 0.3 s per word)
     const words = str.split(/(\s+)/);
     const count = words.filter(w => w.trim()).length;
-    const shown = Math.ceil(count * Math.min(1, local / Math.min(tx.dur * 0.7, count * 0.3)));
+    const shown = tx.wordTimes ? tx.wordTimes.filter(w => w <= local).length
+      : Math.ceil(count * Math.min(1, local / Math.min(tx.dur * 0.7, count * 0.3)));
     let seen = 0;
     str = words.filter(w => (w.trim() ? ++seen <= shown : seen < shown)).join('');
   }
@@ -136,7 +139,7 @@ function drawText(ctx, W, H, tx, local) {
   if (!str.trim()) return;
 
   let size = tx.size / 100 * H;
-  const lines = str.split('\n');
+  let lines = str.split('\n');
   ctx.save();
   const setFont = () => {
     ctx.font = st.font.replace('{s}', size);
@@ -146,6 +149,20 @@ function drawText(ctx, W, H, tx, local) {
   if (st.fit) {
     const widest = Math.max(...lines.map(l => ctx.measureText(l).width));
     if (widest > W * 0.92) { size *= W * 0.92 / widest; setFont(); }
+  } else {
+    // wrap the whole text once, then show only the words revealed so far, so lines never jump
+    const wrapped = [];
+    for (const para of (st.upper ? full.toUpperCase() : st.lower ? full.toLowerCase() : full).split('\n')) {
+      let line = '';
+      for (const w of para.split(/\s+/).filter(Boolean)) {
+        const next = line ? `${line} ${w}` : w;
+        if (line && ctx.measureText(next).width > W * 0.86) { wrapped.push(line); line = w; } else line = next;
+      }
+      wrapped.push(line);
+    }
+    let left = str.split(/\s+/).filter(Boolean).length;
+    lines = wrapped.map(l => { const ws = l.split(' '); const take = ws.slice(0, Math.max(0, left)); left -= ws.length; return take.join(' '); });
+    while (lines.length > 1 && !lines.at(-1)) lines.pop();
   }
   ctx.globalAlpha = Math.max(0, alpha);
   ctx.textAlign = 'center';

@@ -7,6 +7,8 @@ GET /api/clips/search?q=thorfinn -> clip packs made for editors ("<name> scene p
 GET /api/clips/fetch?id=VIDEOID  -> starts a download (720p max), returns status
 GET /api/clips/status?id=VIDEOID -> {"state": "downloading" | "done" | "error", "progress": 0..1}
 GET /cache/VIDEOID.mp4           -> the downloaded file
+GET /api/clips/search?q=thorfinn&kind=dialogue -> English dub scenes (for a spoken intro line)
+GET /api/transcribe?id=VIDEOID   -> what's said and when (Whisper, word timings; translated to English)
 """
 import json
 import re
@@ -16,7 +18,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import subprocess
+
 import imageio_ffmpeg
+import numpy as np
 import yt_dlp
 
 ROOT = Path(__file__).resolve().parent
@@ -28,10 +33,16 @@ jobs = {}  # video id -> {"state", "progress", "error"}
 lock = threading.Lock()
 
 
-def search(q):
+QUERIES = {
+    "clips": ("{} scene pack", "{} raw clips for edits"),
+    "dialogue": ("{} english dub scene",),
+}
+
+
+def search(q, kind="clips"):
     seen, out = set(), []
     with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "skip_download": True}) as y:
-        for query in (f"{q} scene pack", f"{q} raw clips for edits"):
+        for query in (t.format(q) for t in QUERIES[kind]):
             for e in y.extract_info(f"ytsearch10:{query}", download=False).get("entries") or []:
                 dur = e.get("duration") or 0
                 if not e.get("id") or e["id"] in seen or not 15 <= dur <= MAX_SECONDS:
@@ -66,6 +77,31 @@ def download(vid):
         jobs[vid].update(state="error", error=str(e).splitlines()[-1][:200])
 
 
+whisper = {}
+
+
+def transcribe(vid):
+    """Segments with word timings, cached next to the video. Speech in other languages is
+    translated to English (the captions are English either way)."""
+    out = CACHE / f"{vid}.json"
+    if out.exists():
+        return json.loads(out.read_text(encoding="utf-8"))
+    with lock:
+        if "model" not in whisper:
+            from faster_whisper import WhisperModel  # first use downloads the model (~150 MB)
+            whisper["model"] = WhisperModel("base", device="cpu", compute_type="int8")
+    pcm = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-i", str(CACHE / f"{vid}.mp4"),
+                          "-ac", "1", "-ar", "16000", "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    segs, info = whisper["model"].transcribe(np.frombuffer(pcm, np.float32), task="translate",
+                                             vad_filter=True, word_timestamps=True)
+    data = {"language": info.language, "segments": [
+        {"start": s.start, "end": s.end, "text": s.text.strip(), "logprob": s.avg_logprob,
+         "words": [[w.start, w.end, w.word.strip()] for w in (s.words or [])]}
+        for s in segs]}
+    out.write_text(json.dumps(data), encoding="utf-8")
+    return data
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(ROOT), **kw)
@@ -92,7 +128,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not q.get("q", "").strip():
                 return self.send_json({"error": "missing q"}, 400)
             try:
-                return self.send_json({"results": search(q["q"].strip()[:100])})
+                kind = q.get("kind", "clips") if q.get("kind") in QUERIES else "clips"
+                return self.send_json({"results": search(q["q"].strip()[:100], kind)})
             except Exception as e:
                 return self.send_json({"error": str(e).splitlines()[-1][:200]}, 502)
         vid = q.get("id", "")
@@ -108,6 +145,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(jobs[vid])
         if url.path == "/api/clips/status":
             return self.send_json(jobs.get(vid, {"state": "unknown"}))
+        if url.path == "/api/transcribe":
+            if not (CACHE / f"{vid}.mp4").exists():
+                return self.send_json({"error": "download it first"}, 404)
+            try:
+                return self.send_json(transcribe(vid))
+            except Exception as e:
+                return self.send_json({"error": str(e).splitlines()[-1][:200]}, 500)
         self.send_json({"error": "not found"}, 404)
 
 

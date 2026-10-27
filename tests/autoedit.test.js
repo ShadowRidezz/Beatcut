@@ -1,7 +1,7 @@
 // node tests/autoedit.test.js — the edit generator on a synthetic song + shot list
 const assert = require('assert');
 global.uid = (() => { let n = 0; return () => `id${n++}`; })();
-const { buildEdit, shotsFromSamples, songWindow } = require('../js/autoedit.js');
+const { buildEdit, shotsFromSamples, songWindow, pickLines } = require('../js/autoedit.js');
 
 // shots: hard cuts every 2 s, one dark shot that must be dropped
 const samples = [];
@@ -81,6 +81,30 @@ let tt = -heroEdit.offset, titleClip = null;
 for (const c of heroEdit.clips) { const d = (c.out - c.in) / c.speed; if (tt < 15 - 1e-6 && tt + d > 15 - 1e-3) titleClip = c; tt += d; }
 assert(titleClip && titleClip.in >= withHero[3].start - 1e-9 && titleClip.in < withHero[3].end, 'the title cut should use the hero shot');
 assert.strictEqual(heroEdit.clips.filter(c => c.in >= withHero[3].start - 1e-9 && c.in < withHero[3].end).length >= 1, true);
+
+// spoken intro: a line of dialogue at normal speed with its voice, captions on the real word times
+const speech = { segments: [
+  { start: 0.1, end: 2.0, text: 'cut off start', logprob: -0.3, words: [[0.1, 0.5, 'cut'], [0.6, 1.0, 'off'], [1.1, 2.0, 'start']] },
+  { start: 3.0, end: 4.6, text: 'I have no enemies.', logprob: -0.2, words: [[3.0, 3.2, 'I'], [3.3, 3.6, 'have'], [3.7, 3.9, 'no'], [4.0, 4.6, 'enemies.']] },
+  { start: 5.0, end: 6.0, text: 'Nobody does.', logprob: -0.2, words: [[5.0, 5.4, 'Nobody'], [5.5, 6.0, 'does.']] },
+  { start: 20, end: 40, text: 'a very long speech that never ends', logprob: -0.2, words: [[20, 25, 'a'], [25, 30, 'very'], [30, 35, 'long'], [35, 40, 'speech']] },
+] };
+const picked = pickLines(speech.segments, 5);
+assert(picked && picked.list[0].text === 'I have no enemies.', 'should pick the clean line, not the cut-off first one');
+const talky = buildEdit({ song, pool, name: 'Levi', style: 'dark', seed: 4, length: 20,
+  dialogue: { id: 'talk', speech, shots: [], duration: 60, w: 1280, h: 720 } });
+const open = talky.clips[0];
+assert.strictEqual(open.mediaId, 'talk');
+assert.strictEqual(open.speed, 1);
+assert.strictEqual(open.volume, 1);
+assert(talky.duckUntil > 0 && Math.abs(talky.duckUntil - (open.out - open.in)) < 1e-6, 'music should duck exactly while the dialogue plays');
+const caps = talky.texts.filter(x => x.style === 'caption');
+assert(caps.length >= 1 && caps[0].text === 'I have no enemies.', `captions: ${caps.map(c => c.text)}`);
+assert.deepStrictEqual(caps[0].wordTimes.map(v => +v.toFixed(2)), [0, 0.3, 0.7, 1]);
+assert(Math.abs(open.in + caps[0].start - 3.0) < 1e-6, 'caption must start when the line is spoken');
+assert(talky.texts.some(x => x.text === 'LEVI'), 'title still lands before the drop');
+const silent = buildEdit({ song, pool, name: 'Levi', style: 'dark', seed: 4, length: 20 });
+assert.strictEqual(silent.duckUntil, 0);
 
 // long song: frames the edit around the drop
 const long = { duration: 120, beats: [], peaks: new Float32Array(120 * 60) };

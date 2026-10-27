@@ -33,7 +33,15 @@ async function mixAudio(duration, sampleRate) {
   };
   const song = S.song;
   if (song && song.volume > 0 && !S.musicOut) {
-    play(song.buffer, Math.max(0, song.offset), Math.max(0, -song.offset), undefined, 1, song.volume);
+    const src = ctx.createBufferSource(), gain = ctx.createGain();
+    src.buffer = song.buffer;
+    gain.gain.setValueAtTime(song.volume * (song.duckUntil ? DUCK : 1), 0);
+    if (song.duckUntil) { // back up to full volume as the dialogue ends
+      gain.gain.setValueAtTime(song.volume * DUCK, Math.max(0, song.duckUntil - 0.15));
+      gain.gain.linearRampToValueAtTime(song.volume, song.duckUntil);
+    }
+    src.connect(gain).connect(ctx.destination);
+    src.start(Math.max(0, song.offset), Math.max(0, -song.offset));
   }
   for (const r of layoutClips(S.clips)) {
     if (r.clip.volume <= 0) continue;

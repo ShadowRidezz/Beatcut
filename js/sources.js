@@ -55,11 +55,18 @@ async function searchCommons(q) {
 let clipServer;
 const hasClipServer = () => (clipServer ??= fetch('/api/ping').then(r => r.ok).catch(() => false));
 
-async function searchYouTube(q) {
-  const res = await fetch('/api/clips/search?' + new URLSearchParams({ q }));
+async function searchYouTube(q, kind = 'clips') {
+  const res = await fetch('/api/clips/search?' + new URLSearchParams({ q, kind }));
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Clip search failed (${res.status})`);
   return data.results;
+}
+
+async function transcribe(id) {
+  const res = await fetch(`/api/transcribe?id=${id}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Transcription failed');
+  return data;
 }
 
 async function fetchYouTube(id, onProgress) {

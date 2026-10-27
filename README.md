@@ -24,7 +24,7 @@ Tests: `node tests/beats.test.js` and `node tests/autoedit.test.js`
 2. **Character**: type who the edit is about (for example Thorfinn) and press Enter. **Find clips** shows scene packs and raw clips that editors upload to YouTube for that character. Press **Add the top 3 for me**, or open any of them to preview it first. You can skip this step, because **Make my edit** grabs the top 3 by itself. You can also drop your own footage, or use **Free archive** (Wikimedia Commons) for public-domain cartoons.
 3. **Make it**: choose a style (Dark, Noir, Cold, Warm, Vivid, Clean, or Surprise me), optionally type a title (for example "a true warrior"), and press the button. **Make it again** gives a new version.
 
-   Every edit follows the same structure as the reference edits. A calm intro holds one or two long shots of the character (the shots the clip packs' thumbnails came from) and blurs in. The title then appears one word per beat, right before the drop. On the drop there's a white flash, then fast cuts on the beat with motion-smear and zoom-blur transitions. The edit fades to black at the end.
+   Every edit follows the same structure as the reference edits. The intro plays a real line of the character's dialogue with its voice: an English dub scene is found, and speech-to-text (Whisper, running on your PC) picks a short line. Captions appear word by word as the words are spoken, and the music is lowered underneath. If there's no dialogue, the intro holds one or two long shots of the character (the shots the clip packs' thumbnails came from). The title then appears one word per beat, right before the drop. On the drop there's a white flash, then fast cuts on the beat with motion-smear and zoom-blur transitions. The edit fades to black at the end.
 
 Then **Export**: 9:16, 1:1 or 16:9, 720p or 1080p, 30 or 60 fps.
 
@@ -37,6 +37,7 @@ Then **Export**: 9:16, 1:1 or 16:9, 720p or 1080p, 30 or 60 fps.
 ## About the footage
 
 - **Find clips** searches YouTube for "<name> scene pack" and "<name> raw clips for edits". It skips anything over 15 minutes and downloads at up to 720p into `cache/`. Downloading from YouTube is against YouTube's terms, and the clips belong to the show's owners. That's normal for fan edits, but platforms can mute or claim them.
+- Speech-to-text uses Whisper "base" through faster-whisper. The model (~150 MB) downloads the first time it's needed. Speech in other languages is translated into English captions.
 - If YouTube changes something and downloads stop working, restart with `Start Beatcut.vbs`: it updates yt-dlp in the background each time.
 - Without the helper (for example a plain static server), only **Free archive** works. That's Wikimedia Commons: public-domain cartoons and old films.
 

@@ -36,7 +36,7 @@ function selected() {
 const undoStack = [], redoStack = [];
 const snapshot = () => JSON.stringify({
   clips: S.clips, texts: S.texts, aspect: S.aspect,
-  song: S.song && { offset: S.song.offset, volume: S.song.volume },
+  song: S.song && { offset: S.song.offset, volume: S.song.volume, duckUntil: S.song.duckUntil || 0 },
 });
 function restore(json) {
   const d = JSON.parse(json);
@@ -242,7 +242,7 @@ function syncMedia() {
   }
   if (S.song) {
     const want = S.t - S.song.offset;
-    songEl.volume = clamp(S.song.volume, 0, 1);
+    songEl.volume = clamp(S.song.volume * (S.t < (S.song.duckUntil || 0) ? DUCK : 1), 0, 1);
     if (S.playing && want >= 0 && want < S.song.duration) {
       if (Math.abs(songEl.currentTime - want) > 0.12) songEl.currentTime = want;
       if (songEl.paused) songEl.play().catch(() => {});
@@ -679,11 +679,11 @@ function renderYouTube() {
     : `<p class="fine">No clip packs found for “${esc(ytQuery)}”. Try the full name or the show's name.</p>`;
   refreshIcons();
 }
-async function addYouTube(r, onProgress) {
+async function addYouTube(r, onProgress, extra = {}) {
   const existing = S.media.find(m => m.ytId === r.id);
-  if (existing) return existing;
+  if (existing) return Object.assign(existing, extra);
   const blob = await fetchYouTube(r.id, onProgress);
-  return addMedia(blob, r.title, { source: `YouTube · ${r.channel}`, page: r.page, ytId: r.id, thumbUrl: r.thumb, tags: ytQuery || $('#clipQuery').value.trim() });
+  return addMedia(blob, r.title, { source: `YouTube · ${r.channel}`, page: r.page, ytId: r.id, thumbUrl: r.thumb, tags: ytQuery || $('#clipQuery').value.trim(), ...extra });
 }
 async function addYouTubeWithToast(list) {
   for (const [i, r] of list.entries()) {
@@ -851,8 +851,8 @@ async function makeEdit() {
   S.making = true;
   renderInspector();
   try {
-    let pool = S.media.filter(m => name && `${m.name} ${m.tags}`.toLowerCase().includes(name.toLowerCase()));
-    if (!pool.length) pool = S.media.slice();
+    let pool = S.media.filter(m => !m.dialogue && name && `${m.name} ${m.tags}`.toLowerCase().includes(name.toLowerCase()));
+    if (!pool.length) pool = S.media.filter(m => !m.dialogue);
     if (!pool.length) {
       if (!name) throw new Error('Type the character name, or drop some footage of them');
       status(`Finding clips of ${name}…`);
@@ -879,14 +879,32 @@ async function makeEdit() {
       try { await findShots(m, p => status(`Finding the best moments · video ${i + 1} of ${pool.length} · ${Math.round(p * 100)}%`)); }
       catch (e) { console.warn(e); m.shots = []; }
     }
+    // a line of the character's own dialogue for the intro (English dub scene, transcribed)
+    let dialogue = null;
+    if (name && (await hasClipServer())) {
+      try {
+        status(`Finding a line of ${name}'s dialogue…`);
+        let dm = S.media.find(m => m.dialogue && m.tags === name);
+        if (!dm) {
+          const found = (await searchYouTube(name, 'dialogue')).filter(r => r.duration <= 400)[0];
+          if (found) dm = await addYouTube(found, p => status(`Downloading a dialogue scene · ${Math.round(p * 100)}%`), { dialogue: true });
+        }
+        if (dm) {
+          status('Listening to the dialogue…');
+          dm.speech ??= await transcribe(dm.ytId);
+          await findShots(dm).catch(() => { dm.shots = []; });
+          dialogue = { id: dm.id, speech: dm.speech, shots: dm.shots, duration: dm.duration, w: dm.el.videoWidth, h: dm.el.videoHeight };
+        }
+      } catch (e) { console.warn('no dialogue', e); }
+    }
     const picks = ['dark', 'noir', 'cold', 'warm'];
     const style = S.style === 'auto' ? picks[Math.floor(Math.random() * picks.length)] : S.style;
     const [aw, ah] = ASPECTS[S.aspect];
     const r = buildEdit({
       song: S.song, pool: pool.map(m => ({ id: m.id, shots: m.shots, w: m.el.videoWidth, h: m.el.videoHeight, manga: /manga/i.test(m.name) })),
-      name, title: S.title, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah,
+      name, title: S.title, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah, dialogue,
     });
-    commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.sel = null; });
+    commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.song.duckUntil = r.duckUntil; S.sel = null; });
     seek(0);
     play();
     toast(`Here's your ${STYLES[style].label.toLowerCase()} edit. Press Make it again for a different version.`);

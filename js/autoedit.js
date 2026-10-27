@@ -243,7 +243,30 @@ function focusScores(shots) {
 const TITLE_SIZE = { serif: 13, big: 30, bold: 15, caption: 7 };
 
 // Builds clips + texts. Pure: needs the song, the shot list per media, and options.
-function buildEdit({ song, pool, name, title, style, seed, length, aspect = 9 / 16 }) {
+// Picks the best run of 1-3 spoken lines that fits in `len` seconds (short complete lines,
+// confidently transcribed; a line that starts with the clip is probably cut off, so it scores lower).
+function pickLines(segments, len) {
+  const segs = segments.filter(s => s.words && s.words.length);
+  let best = null;
+  for (let i = 0; i < segs.length; i++) {
+    for (let j = i; j < Math.min(segs.length, i + 3); j++) {
+      const span = segs[j].end - segs[i].start;
+      if (span > len - 0.6) break;
+      const list = segs.slice(i, j + 1);
+      const words = list.reduce((a, s) => a + s.words.length, 0);
+      // edits use short punchy lines (3-9 words each); long rambling ones score low
+      const punchy = list.reduce((a, s) => a + (s.words.length >= 3 && s.words.length <= 9 ? 3 : s.words.length > 9 ? 0.5 : 1), 0);
+      const cutOff = segs[i].start < 0.5 ? 4 : 0; // starts with the clip: probably cut mid-sentence
+      // names are what speech recognition gets wrong ("King Knoot"): avoid lines full of them
+      const names = list.reduce((a, s) => a + s.words.filter((w, k) => k > 0 && /^[A-Z][a-z]/.test(w[2]) && w[2] !== 'I').length, 0);
+      const score = punchy - cutOff - names * 1.5 + list.reduce((a, s) => a + s.logprob, 0) + (span / len) * 2;
+      if (words >= 3 && (!best || score > best.score)) best = { list, span, score };
+    }
+  }
+  return best;
+}
+
+function buildEdit({ song, pool, name, title, style, seed, length, aspect = 9 / 16, dialogue = null }) {
   const rand = rng(seed);
   const st = STYLES[style] || STYLES.dark;
   const [w0, w1, dropAt] = songWindow(song, length);
@@ -313,19 +336,36 @@ function buildEdit({ song, pool, name, title, style, seed, length, aspect = 9 / 
     if (best && best.thumbMatch > 0.55) heroes.push(best);
   }
   heroes.sort((a, b) => b.thumbMatch - a.thumbMatch);
-  // with two hero shots the intro is just two long shots, like the reference: opening + title
+  // spoken opening (like the reference): one continuous clip of a line of dialogue, at normal
+  // speed with its voice, held until the title starts
   const before = cuts.filter(c => c.intro && c.end <= marks[titleIdx] + 1e-9);
-  if (heroes.length >= 2 && before.length > 1) {
+  const openLen = marks[titleIdx];
+  const lines = dialogue && before.length && openLen >= 2.5 ? pickLines(dialogue.speech.segments, openLen) : null;
+  if (lines) {
+    cuts = [{ ...before[0], end: openLen, dialogue: true }, ...cuts.slice(before.length)];
+  } else if (heroes.length >= 2 && before.length > 1) {
+    // with two hero shots the intro is just two long shots, like the reference: opening + title
     cuts = [{ ...before[0], end: before.at(-1).end }, ...cuts.slice(before.length)];
   }
-  const introCuts = cuts.filter(c => c.intro);
+  const introCuts = cuts.filter(c => c.intro && !c.dialogue);
   const heroFor = new Map(); // cut -> hero shot: the title cut (last intro cut) first, then the opening
   [introCuts.at(-1), introCuts[0], ...introCuts.slice(1, -1)].filter(Boolean).forEach(c => { if (heroes.length && !heroFor.has(c)) heroFor.set(c, heroes.shift()); });
 
   const used = new Set(), reserved = new Set(heroFor.values());
   let lastMedia = null, motionFlip = rand() < 0.5;
+  let s0 = 0;
+  if (lines) s0 = Math.max(0, lines.list[0].start - Math.min(0.5, (openLen - lines.span) / 2)); // a breath before the first word
   const clips = cuts.map((cut, k) => {
     const dur = cut.end - cut.start;
+    if (cut.dialogue) {
+      const shot = (dialogue.shots || []).find(s => s0 >= s.start && s0 < s.end);
+      const from = Math.min(s0, Math.max(0, dialogue.duration - dur));
+      return {
+        id: uid(), mediaId: dialogue.id, in: from, out: from + dur, speed: 1, volume: 1,
+        panX: shot && dialogue.w ? bestPan(shot.cols, aspect / (dialogue.w / dialogue.h)) : 0.5,
+        look: st.look, glow: st.glow, zoom: 1, pulse: false, shake: 'off', trans: 'blur', fadeOut: false,
+      };
+    }
     let speed = cut.intro ? 0.85 : cut.e < 0.4 && rand() < 0.5 ? 0.7 : 1;
     let need = dur * speed;
     let free = shots.filter(s => !used.has(s) && !reserved.has(s));
@@ -355,6 +395,17 @@ function buildEdit({ song, pool, name, title, style, seed, length, aspect = 9 / 
   });
 
   const texts = [];
+  if (lines) {
+    // captions: each line appears word by word exactly as it's spoken, then stays until the next
+    lines.list.forEach((seg, i) => {
+      const start = seg.start - s0;
+      const end = Math.min(openLen, i + 1 < lines.list.length ? lines.list[i + 1].start - s0 : seg.end - s0 + 0.6);
+      texts.push({
+        id: uid(), text: seg.words.map(w => w[2]).join(' '), style: 'caption', color: '#ffffff', size: 3.6, y: 72,
+        anim: 'type', wordTimes: seg.words.map(w => Math.max(0, w[0] - seg.start)), start, dur: end - start,
+      });
+    });
+  }
   const size = TITLE_SIZE[st.text.style] || st.text.size;
   if (words.length && dropIdx >= 2) {
     // build-up title: one word per beat, the last word holds right up to the drop
@@ -372,7 +423,7 @@ function buildEdit({ song, pool, name, title, style, seed, length, aspect = 9 / 
     const end = (cuts.find(c => c.end >= drop.start + 1) || cuts.at(-1)).end;
     texts.push({ id: uid(), text: words.join(' '), ...st.text, y: 50, start: drop.start, dur: end - drop.start });
   }
-  return { clips, texts, offset: -w0 };
+  return { clips, texts, offset: -w0, duckUntil: lines ? openLen : 0 };
 }
 
-if (typeof module !== 'undefined') module.exports = { buildEdit, shotsFromSamples, songWindow, bestPan, focusScores, STYLES };
+if (typeof module !== 'undefined') module.exports = { buildEdit, shotsFromSamples, songWindow, bestPan, focusScores, pickLines, STYLES };
