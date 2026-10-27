@@ -10,7 +10,7 @@ const refreshIcons = () => window.lucide?.createIcons();
 const S = {
   media: [], clips: [], texts: [], song: null,
   aspect: '9:16', sel: null, t: 0, playing: false, step: 'song', exporting: false, pps: 80,
-  style: 'auto', length: '20', making: false, musicOut: false,
+  style: 'auto', length: '20', making: false, musicOut: false, title: '',
 };
 const mediaById = id => S.media.find(m => m.id === id);
 // Clips alternate between two players per video, so the next shot can already be rolling
@@ -683,7 +683,7 @@ async function addYouTube(r, onProgress) {
   const existing = S.media.find(m => m.ytId === r.id);
   if (existing) return existing;
   const blob = await fetchYouTube(r.id, onProgress);
-  return addMedia(blob, r.title, { source: `YouTube · ${r.channel}`, page: r.page, ytId: r.id, tags: ytQuery || $('#clipQuery').value.trim() });
+  return addMedia(blob, r.title, { source: `YouTube · ${r.channel}`, page: r.page, ytId: r.id, thumbUrl: r.thumb, tags: ytQuery || $('#clipQuery').value.trim() });
 }
 async function addYouTubeWithToast(list) {
   for (const [i, r] of list.entries()) {
@@ -789,6 +789,8 @@ function renderInspector() {
         ${check(S.media.length, S.media.length ? `${S.media.length} video${S.media.length > 1 ? 's' : ''} of footage` : 'No footage yet: clips of them will be found for you', 'clips')}
       </div>
       ${chips('style', 'Style', { auto: 'Surprise me', ...STYLES }, S.style)}
+      <div class="field"><label>Title before the drop <span class="fine">optional, one word per beat</span></label>
+        <input id="makeTitle" value="${esc(S.title)}" placeholder="${esc(name || 'e.g. a true warrior')}"></div>
       ${S.song ? chips('length', 'Length', { 10: '10 s', 15: '15 s', 20: '20 s', 30: '30 s' }, S.length) : ''}
       <button class="primary wide make" data-act="make" ${S.making ? 'disabled' : ''}><i data-lucide="sparkles"></i> ${made ? 'Make it again (new version)' : 'Make my edit'}</button>
       <p class="fine" id="makeStatus">${S.making ? 'Starting…' : made ? 'Click anything on the timeline to change it, or go to Export.' : ''}</p>
@@ -882,7 +884,7 @@ async function makeEdit() {
     const [aw, ah] = ASPECTS[S.aspect];
     const r = buildEdit({
       song: S.song, pool: pool.map(m => ({ id: m.id, shots: m.shots, w: m.el.videoWidth, h: m.el.videoHeight, manga: /manga/i.test(m.name) })),
-      name, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah,
+      name, title: S.title, style, seed: Date.now() >>> 0, length: +S.length, aspect: aw / ah,
     });
     commit(() => { S.clips = r.clips; S.texts = r.texts; S.song.offset = r.offset; S.sel = null; });
     seek(0);
@@ -901,6 +903,7 @@ const inspector = $('#inspector');
 inspector.addEventListener('focusin', () => { pendingEdit ??= snapshot(); });
 inspector.addEventListener('pointerdown', () => { pendingEdit ??= snapshot(); });
 inspector.addEventListener('input', e => {
+  if (e.target.id === 'makeTitle') { S.title = e.target.value; return; }
   const k = e.target.dataset.k, sel = selected();
   if (!k || !sel) return;
   const o = sel.obj, el = e.target;

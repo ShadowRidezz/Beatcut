@@ -12,14 +12,16 @@ const LOOKS = {
   vivid: { label: 'Vivid', css: 'saturate(1.7) contrast(1.15)' },
   faded: { label: 'Faded', css: 'contrast(.85) brightness(1.08) saturate(.7)' },
 };
-const TRANSITIONS = { none: 'Cut', flash: 'Flash', fade: 'Fade in', zoom: 'Zoom punch', blur: 'Blur in', whip: 'Whip' };
+const TRANSITIONS = { none: 'Cut', flash: 'Flash', smear: 'Smear', zoomblur: 'Zoom blur', fade: 'Fade in', zoom: 'Zoom punch', blur: 'Blur in', whip: 'Whip' };
 const TRANSITION_LEN = 0.3;
+// motion transitions smear a few frames on BOTH sides of the cut, like the reference edits
+const MOTION = { smear: true, zoomblur: true }, SMEAR_IN = 0.12, SMEAR_OUT = 0.08;
 
 // Matched to the inspiration edits: thin lowercase captions with a dark glow, classic serif with a
 // white glow, huge hollow neon outlines, and a filled condensed word with a drop shadow.
 const TEXT_STYLES = {
   caption: { label: 'Caption', font: '300 {s}px Oswald', lower: true, size: 4.2, shadow: true, spacing: 0.02 },
-  serif:   { label: 'Serif', font: '500 {s}px "Cormorant Garamond"', size: 7, glow: true, spacing: 0.02 },
+  serif:   { label: 'Serif', font: '500 {s}px "Cormorant Garamond"', size: 7, glow: true, spacing: 0.02, fit: true, stretch: 1.6 },
   big:     { label: 'Outline', font: '{s}px Anton', upper: true, size: 30, hollow: 0.012, fit: true, spacing: 0.04 },
   bold:    { label: 'Bold', font: '{s}px Anton', upper: true, size: 9, drop: true, fit: true, spacing: 0.01 },
 };
@@ -42,9 +44,11 @@ function drawFrame(ctx, W, H, t, project, getSource) {
   ctx.save();
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  const hit = clipAt(project.clips, t);
-  const src = hit && getSource(hit.clip);
-  if (src && src.videoWidth) drawClip(ctx, W, H, hit.clip, t - hit.start, src, t, project.song);
+  const L = layoutClips(project.clips), i = L.findIndex(r => t >= r.start && t < r.start + r.dur);
+  const hit = L[i], src = hit && getSource(hit.clip);
+  const next = L[i + 1]?.clip;
+  const out = next && MOTION[next.trans] ? { trans: next.trans, remain: hit.start + hit.dur - t } : null;
+  if (src && src.videoWidth) drawClip(ctx, W, H, hit.clip, t - hit.start, src, t, project.song, out, hit.dur);
   for (const tx of project.texts) {
     if (t >= tx.start && t < tx.start + tx.dur) drawText(ctx, W, H, tx, t - tx.start);
   }
@@ -61,7 +65,7 @@ function sinceBeat(song, t) {
   return x - b[lo];
 }
 
-function drawClip(ctx, W, H, c, local, src, t, song) {
+function drawClip(ctx, W, H, c, local, src, t, song, out = null, dur = Infinity) {
   const p = Math.min(1, local / TRANSITION_LEN), inv = 1 - p;
   const tr = local < TRANSITION_LEN ? c.trans : 'none';
   let scale = Math.max(W / src.videoWidth, H / src.videoHeight) * c.zoom;
@@ -80,8 +84,21 @@ function drawClip(ctx, W, H, c, local, src, t, song) {
   const w = src.videoWidth * scale, h = src.videoHeight * scale;
   // panX = which part of the source sits in the middle of the frame (0.5 = centre), never showing an edge
   const x = clamp(W / 2 - w * (c.panX ?? 0.5), W - w, 0) + dx, y = (H - h) / 2 + dy;
-  ctx.filter = css || 'none';
+  // motion transition strength: coming in from the cut, or going out into the next one
+  let motion = null, amt = 0;
+  if (MOTION[c.trans] && local < SMEAR_IN) { motion = c.trans; amt = 1 - local / SMEAR_IN; }
+  if (out && out.remain < SMEAR_OUT) { motion = out.trans; amt = Math.max(amt, 1 - out.remain / SMEAR_OUT); }
+  ctx.filter = [css, motion ? `blur(${amt * 5 * W / 1080}px)` : ''].filter(Boolean).join(' ') || 'none';
   ctx.drawImage(src, x, y, w, h);
+  if (motion) { // ghost copies = motion blur (sideways smear or a radial zoom streak)
+    ctx.globalAlpha = 0.24;
+    for (let k = 1; k <= 5; k++) {
+      const f = amt * k / 5;
+      if (motion === 'smear') ctx.drawImage(src, x + f * W * 0.18, y, w, h);
+      else { const s = 1 + f * 0.3; ctx.drawImage(src, W / 2 - (W / 2 - x) * s, H / 2 - (H / 2 - y) * s, w * s, h * s); }
+    }
+    ctx.globalAlpha = 1;
+  }
   if (c.glow) {
     ctx.globalCompositeOperation = 'screen';
     ctx.globalAlpha = 0.45;
@@ -98,6 +115,7 @@ function drawClip(ctx, W, H, c, local, src, t, song) {
   ctx.globalCompositeOperation = 'source-over';
   if (tr === 'flash') { ctx.fillStyle = `rgba(255,255,255,${inv})`; ctx.fillRect(0, 0, W, H); }
   if (tr === 'fade') { ctx.fillStyle = `rgba(0,0,0,${inv})`; ctx.fillRect(0, 0, W, H); }
+  if (c.fadeOut && dur - local < 0.6) { ctx.fillStyle = `rgba(0,0,0,${1 - (dur - local) / 0.6})`; ctx.fillRect(0, 0, W, H); }
 }
 
 function drawText(ctx, W, H, tx, local) {
@@ -133,7 +151,7 @@ function drawText(ctx, W, H, tx, local) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.translate(W / 2 + dx, tx.y / 100 * H + dy);
-  ctx.scale(scale, scale);
+  ctx.scale(scale, scale * (st.stretch || 1));
   const lh = size * 1.05;
   lines.forEach((line, i) => {
     const y = (i - (lines.length - 1) / 2) * lh;
@@ -149,7 +167,11 @@ function drawText(ctx, W, H, tx, local) {
       return;
     }
     if (st.shadow) { ctx.shadowColor = 'rgba(0,0,0,.85)'; ctx.shadowBlur = size * 0.6; }
-    if (st.glow) { ctx.shadowColor = 'rgba(255,255,255,.55)'; ctx.shadowBlur = size * 0.45; }
+    if (st.glow) { // dark halo first so it reads on bright frames, then the white glow
+      ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = size * 0.5;
+      ctx.fillStyle = tx.color; ctx.fillText(line, 0, y);
+      ctx.shadowColor = 'rgba(200,215,255,.7)'; ctx.shadowBlur = size * 0.35;
+    }
     if (st.drop) { ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowOffsetY = size * 0.06; ctx.shadowBlur = size * 0.15; }
     ctx.fillStyle = tx.color;
     ctx.fillText(line, 0, y);
